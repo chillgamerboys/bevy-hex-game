@@ -473,44 +473,78 @@ fn forest_detail(
 fn shrine(g: &GrandCompiler, id: &str) -> Result<ObjectInstance, ContractError> {
     let frame = g.geography.frame(&format!("shrine_{id}"))?;
     let root = frame.hex([0., 0.]);
-    let floor = g.support_at(&frame, [0., 0.])?.level + 1;
-    let mut cells = Cells::new();
-    for q in -8_i64..=8 {
-        for r in -8_i64..=8 {
-            let d = q.abs().max(r.abs()).max((q + r).abs());
-            let p = WorldHex::new(root.q + q, root.r + r);
-            let entrance = frame.hex([0., -10.]);
-            let plant_door = id == "plant"
-                && p.checked_distance(entrance)
-                    .is_ok_and(|distance| distance < 5);
-            if d == 7 && (q + r) % 3 == 0 && !plant_door {
-                add(
-                    &mut cells,
-                    p,
-                    floor,
-                    floor + 18,
-                    if id == "plant" { "timber" } else { "stone" },
-                );
-            }
-            if d == 8 {
-                add(
-                    &mut cells,
-                    p,
-                    floor + 18,
-                    floor + 20,
-                    if id == "plant" { "moss" } else { "stone" },
-                );
+    let entrance = frame.hex([0., -10.]);
+    // Keep a small colonnade where possible. Wider route terminals need their
+    // piers outside the walking ribbon; each pier starts on its own real floor.
+    for radius in [7_i64, 10, 13] {
+        let mut piers = Vec::new();
+        for q in -radius..=radius {
+            for r in -radius..=radius {
+                if q.abs().max(r.abs()).max((q + r).abs()) != radius || (q + r) % 3 != 0 {
+                    continue;
+                }
+                let p = WorldHex::new(root.q + q, root.r + r);
+                if id == "plant" && p.checked_distance(entrance).is_ok_and(|d| d < 5) {
+                    continue;
+                }
+                let Ok(support) = g.support_at(&frame, frame.local(p)) else {
+                    continue;
+                };
+                let floor = support.level + 1;
+                if !g.reserved_interval(p, floor, floor + 20)
+                    && g.column(p)
+                        .0
+                        .runs
+                        .iter()
+                        .all(|run| run.bottom >= floor + 20 || run.top <= floor)
+                {
+                    piers.push((p, floor));
+                }
             }
         }
+        if piers.len() < 3 {
+            continue;
+        }
+        let Some(roof) = piers.iter().map(|(_, floor)| floor + 18).max() else {
+            continue;
+        };
+        let mut cells = Cells::new();
+        for (p, floor) in piers {
+            add(
+                &mut cells,
+                p,
+                floor,
+                roof,
+                if id == "plant" { "timber" } else { "stone" },
+            );
+        }
+        for q in -radius - 1..=radius + 1 {
+            for r in -radius - 1..=radius + 1 {
+                if q.abs().max(r.abs()).max((q + r).abs()) == radius + 1 {
+                    add(
+                        &mut cells,
+                        WorldHex::new(root.q + q, root.r + r),
+                        roof,
+                        roof + 2,
+                        if id == "plant" { "moss" } else { "stone" },
+                    );
+                }
+            }
+        }
+        return object(
+            g,
+            format!("grand/shrine/{id}"),
+            "structure/grand-shrine",
+            root,
+            cells,
+        );
     }
-    object(
-        g,
+    Err(ContractError::new(
         format!("grand/shrine/{id}"),
-        "structure/grand-shrine",
-        root,
-        cells,
-    )
+        "no grounded colonnade outside the authored routes",
+    ))
 }
+
 /// Reserve a sparse global forest (bounded roots and exact compact occupancies).
 pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, ContractError> {
     let mut out = vec![
@@ -931,6 +965,53 @@ mod forest_tests {
                 (*bottom..*top).map(move |level| (q, r, level, material.as_str()))
             })
             .collect()
+    }
+
+    #[test]
+    fn shrine_markers_keep_complete_grounded_pedestals_outside_body_reservations() {
+        let g = super::super::tests::compiler(false);
+        for (id, marker) in [
+            ("fire", fire_marker(g)),
+            ("air", air_marker(g)),
+            ("earth", earth_marker(g)),
+        ] {
+            let marker = marker.expect("nearby grounded marker");
+            assert_eq!(marker.occupancy.len(), 19, "{id}");
+            assert_eq!(
+                marker.grounding.as_ref().expect("actual contacts").len(),
+                19,
+                "{id}"
+            );
+            let frame = g
+                .geography
+                .frame(&format!("shrine_{id}"))
+                .expect("claim frame");
+            let [east, north] = frame.local(marker.origin.column);
+            assert!(east.hypot(north) < 28., "{id}: bounded local placement");
+            for column in &marker.occupancy {
+                let (terrain, _) = g.column(column.position);
+                for run in &column.runs {
+                    assert!(
+                        !g.reserved_interval(column.position, run.bottom, run.top),
+                        "{id}: claimed walking space"
+                    );
+                    assert!(
+                        !terrain
+                            .runs
+                            .iter()
+                            .any(|t| t.bottom < run.top && t.top > run.bottom),
+                        "{id}: terrain intersection"
+                    );
+                }
+            }
+        }
+        for id in ["water", "air", "earth", "plant", "fire"] {
+            let colonnade = shrine(g, id).expect("grounded shrine perimeter");
+            assert!(
+                colonnade.grounding.as_ref().expect("piers").len() >= 3,
+                "{id}"
+            );
+        }
     }
 
     #[test]

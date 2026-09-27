@@ -189,7 +189,7 @@ const BAYS: &[Bay] = &[
         frame: "library_lower",
     },
     Bay {
-        x: 55.,
+        x: 70.,
         z: -25.,
         along_x: false,
         frame: "library_lower",
