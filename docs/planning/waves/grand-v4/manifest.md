@@ -1,6 +1,6 @@
 # Grand V4 integration wave
 
-Status: resumed September 26; correcting failed terrain traversal and forest character
+Status: September 26 revision02 approved; production geography transfer in progress
 Wave: `wave/grand-v4`
 Verified remote dev: `bb556963632de933b44fb75b1d306aca79258cef`
 Playable integration base: `873a2c37eeb8eda23c11d398ce7d68d7965a64db`
@@ -32,6 +32,66 @@ Grand V3's authored composition at larger scale.
 Existing ArenaTick, exact TilePos, ArenaExpeditionSites, ArenaAvailability, finite V4 packages and atomic owner attachments remain authority. Gameplay owns ActorId widening and Grand progression/checkpoint. World owns Grand package/sites, finite overlay codecs and partial damage. Coordinator owns shared map-kind declaration and application adapters. New additive vocabulary lands in wave before consumers; no old-map semantics are changed merely to admit Grand.
 
 ## Dispatch queue
+- id: L4
+  title: Approved geography and terrain transfer
+  order: orders/L4.md
+  ticket: null
+  authority: world
+  builder: worker
+  branch: feat/grand-r02-geography
+  owns:
+    - "crates/hex_schematic/src/v4/grand/** (except dressing and ground_cover)"
+    - "crates/hex_schematic/src/v4/northern/mod.rs (shared overview producer schema)"
+    - "assets/config/v4/grand-v4/world.ron"
+    - "assets/config/v4/grand-v4/geography-r02.json"
+    - "crates/hex_world_tool/src/grand.rs"
+  dispatch_blockers: []
+  merge_blockers: []
+  fences: [preserve-gameplay-and-saves, approved-r02-relationships]
+  selector: {concerns: [full], full: true}
+  evidence: motion-or-feel
+  sizing: {model: inherited, effort: inherited}
+  state: dispatched
+  pr: null
+- id: L5
+  title: Landmarks and forest character
+  order: orders/L5.md
+  ticket: null
+  authority: world
+  builder: worker
+  branch: feat/grand-r02-dressing
+  owns:
+    - "crates/hex_schematic/src/v4/grand/dressing.rs"
+    - "crates/hex_schematic/src/v4/grand/dressing/**"
+    - "crates/hex_schematic/src/v4/grand/ground_cover.rs"
+    - "assets/config/v4/grand-v4/forest/**"
+  dispatch_blockers: []
+  merge_blockers: [L4]
+  fences: [preserve-gameplay-and-saves, approved-r02-relationships]
+  selector: {concerns: [full], full: true}
+  evidence: motion-or-feel
+  sizing: {model: inherited, effort: inherited}
+  state: dispatched
+  pr: null
+- id: L6
+  title: Runtime geography admission and presentation
+  order: orders/L6.md
+  ticket: null
+  authority: world
+  builder: worker
+  branch: feat/grand-r02-runtime
+  owns:
+    - "crates/hex_map/src/arena/streamed/**"
+    - "crates/hex_world_runtime/** (only necessary geography envelope adaptation)"
+  dispatch_blockers: []
+  merge_blockers: [L4]
+  fences: [preserve-gameplay-and-saves, approved-r02-relationships]
+  selector: {concerns: [full], full: true}
+  evidence: motion-or-feel
+  sizing: {model: inherited, effort: inherited}
+  state: dispatched
+  pr: null
+
 ```yaml
 - id: L1
   title: World content and publication
@@ -298,3 +358,41 @@ published detailed support, with no new streaming requests or collision facts.
 The full static/temporal matrix, exact combined CI gate, native movement and
 30-minute measured session remain open. This checkpoint is physical validation,
 not final terrain taste or presentation acceptance. Linear remains disconnected.
+
+### September 26 approved revision02 transfer
+
+The user explicitly approved the corrected shared topology and authorized the actual
+map. This lifts the mockup-only stop. The frozen oracle and camera/source identities
+are recorded in `approved-r02/`; the production authoring document owns subsequent
+measurable geometry, rather than scattering unrelated coordinates through consumers.
+
+Keep one connected massif, Earth temple at the bottom of a real Crystal climb, the
+continuous Frozen Woods route from its upper exit to the hidden mountain lake shore,
+a garden island within the lake, and enclosing steep peaks that screen the lake from
+the valley. The lake outlet uses a dominant near-vertical fall and connected shorter
+drops. World Tree and small camps compose the lower lake/outlet. No walled fort.
+Volcano keeps a broad landing-to-crater route and substantial sea separation.
+
+L4 owns geographic authoring, terrain/voids/exact sites/water/biomes. L5 owns dressing
+and ground cover through L4's common frames and supports. L6 owns runtime admission
+and distant/detail presentation. Root owns package tooling, game camera/adapters,
+combined source integration, evidence and docs. Independent work starts at once;
+L5/L6 merge after the shared L4 facts exist. Heavy Cargo runs remain serialized.
+
+Before dispatch, pending ground-cover commit a8004de and UI fixture a792c19 were
+integrated as 3a60e5f and 890c1e4. Their original refs remain. Legacy V3 orientation
+repair 5605bda stays banked and is not a map-rebuild prerequisite. Existing f4824b7
+source, immutable packages and saves remain recoverable; none is overwritten.
+
+GitHub dev was independently confirmed via API at bb556963632de933b44fb75b1d306aca79258cef.
+Broad fetch reported unresolved pack deltas; no successful broad fetch is claimed.
+Open PR heads and the original stack are unchanged; do not merge historical tips.
+The combined historical candidate has 750 changed paths relative to dev before this
+amendment. Linear reconciliation remains unavailable. Draft #224 remains the delivery
+PR targeting dev, and published history is preserved.
+
+First checkpoint: complete plain terrain, actual caves/stairs, water and exact sites
+at measured scale; fresh matching cameras establish transfer fidelity before dense
+dressing. Final combined acceptance is still required. Prior package04 passes are
+historical, not evidence for this changed geography. No native play window is opened
+without the user's play request or approval of a named live review.

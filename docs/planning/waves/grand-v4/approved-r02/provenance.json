@@ -1,0 +1,11 @@
+{
+  "approval_date": "2026-09-26",
+  "user_authorization": "Ok, this seems a lot closer to the plan, now you can dev the actual map",
+  "source_directory": "/Users/alberto/Documents/Codex/2026-09-25/for-the-hex-game/outputs/grand-v4-design/round-a/revision-02/model",
+  "scope": "Geographic relationships approved for production transfer; coarse raster, placeholder detail and motion remain subject to actual-game review.",
+  "files": {
+    "geometry-audit.json": "423db25283852a476cd78c4d7456b1d6a4bee25603ea56bca9a674c6652f7f72",
+    "shared-topology-r02-spec.json": "fced0f8ced447a8acfd752ecc4c1a296da37ea1ddcc12fabbe36fbe2d52864bd",
+    "view-cameras.json": "9dec7d3338854938c1e02f868b185c0df3dcc4a02ddf652701f7e30bd1a4becb"
+  }
+}

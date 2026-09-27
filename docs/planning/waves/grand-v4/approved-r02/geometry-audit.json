@@ -1,0 +1,132 @@
+{
+  "status": "MODEL_GEOMETRY_AUDIT_NOT_GAMEPLAY_ACCEPTANCE",
+  "sea": 0,
+  "vertical_exaggeration": 1,
+  "shore_gap": {
+    "method": "720 radial continuous sea-intersection samples per coast; closest pair",
+    "distance": 800.0468963631544,
+    "mainland_shore": [
+      -791.9696549820551,
+      -211.96514346658324
+    ],
+    "volcano_shore": [
+      -1343.9033342360772,
+      -791.1406350798197
+    ],
+    "target": 800,
+    "status": "provisional geometric target, not a sailing benchmark"
+  },
+  "rendered_shore_gap": {
+    "distance": 813.3486337358661,
+    "volcano_cap_center": [
+      -1306.0,
+      -886.0
+    ],
+    "mainland_cap_center": [
+      -538.0,
+      -574.0
+    ],
+    "method": "minimum distance between actual emitted positive-height12\u00d712 terrain cap footprints; exactly sea-level caps omitted",
+    "status": "model shoreline geometry only, not sailing evidence"
+  },
+  "views": [
+    {
+      "view": "tree-bank",
+      "eye": [
+        70.0,
+        47.7,
+        -55.0
+      ],
+      "sample_kind": "exposed exported lake triangle centroids",
+      "water_samples": 1883,
+      "visible_samples": 0,
+      "visible_examples": []
+    },
+    {
+      "view": "lower-lake-bank",
+      "eye": [
+        100.0,
+        57.7,
+        100.0
+      ],
+      "sample_kind": "exposed exported lake triangle centroids",
+      "water_samples": 1883,
+      "visible_samples": 0,
+      "visible_examples": []
+    },
+    {
+      "view": "waterfall-approach",
+      "eye": [
+        450.0,
+        49.7,
+        280.0
+      ],
+      "sample_kind": "exposed exported lake triangle centroids",
+      "water_samples": 1883,
+      "visible_samples": 0,
+      "visible_examples": []
+    }
+  ],
+  "routes": [
+    {
+      "route": "ascent",
+      "start": [
+        -170.0,
+        65.0,
+        452.0
+      ],
+      "end": [
+        -169.99999999999997,
+        205.0,
+        648.0
+      ],
+      "horizontal_length": 880.2736614618823,
+      "max_riser": 0.35000000000002274,
+      "maximum_sample_grade": 0.18290982847556486,
+      "status": "authored mesh/geometry only; no controller proof"
+    },
+    {
+      "route": "frozen_woods",
+      "start": [
+        -170.0,
+        205.1,
+        648.0
+      ],
+      "end": [
+        216,
+        206.14999999999998,
+        650
+      ],
+      "horizontal_length": 468.69174166107496,
+      "max_riser": 0.35000000000002274,
+      "maximum_sample_grade": 0.17948717948719742,
+      "status": "authored mesh/geometry only; no controller proof"
+    },
+    {
+      "route": "volcano",
+      "start": [
+        -1373.445,
+        1.0499999999999998,
+        -776.636
+      ],
+      "end": [
+        -1613.445,
+        155.04999999999998,
+        -954.636
+      ],
+      "horizontal_length": 977.3974752811439,
+      "max_riser": 0.35000000000002274,
+      "maximum_sample_grade": 0.4421220393322836,
+      "status": "authored mesh/geometry only; no controller proof"
+    }
+  ],
+  "terrain_boundary_max": -17.313219987681926,
+  "vertices": 77721,
+  "triangles": 138253,
+  "limitations": [
+    "Intact ascent proxy; broken sections pending",
+    "Shadow and library interiors are concepts only",
+    "No exact7\u00d7 scale or native traversal/sailing validation",
+    "Ground visibility checked at named eye positions, not universal hidden-lake proof"
+  ]
+}
