@@ -93,7 +93,9 @@ fn export_upper_mountain_source_study() -> Result<(), Box<dyn Error>> {
     let output = std::env::var("HEX_GRAND_UPPER_STUDY_OUT")?;
     let output = Path::new(&output);
     fs::create_dir_all(output)?;
-    assert!(!output.join("columns.csv").exists(), "preserve prior study");
+    if output.join("columns.csv").exists() {
+        return Err("refusing to overwrite prior study columns".into());
+    }
     let candidate_bytes =
         include_bytes!("../../../../../assets/config/v4/grand-v4/geography-r02.json");
     let candidate: GrandGeographyDocument = serde_json::from_slice(candidate_bytes)?;
@@ -114,8 +116,12 @@ fn export_upper_mountain_source_study() -> Result<(), Box<dyn Error>> {
     let before = GrandCompiler::with_geography(source.clone(), baseline.clone(), &baseline_bytes)?;
     eprintln!("UPPER_STUDY constructing candidate");
     let after = GrandCompiler::with_geography(source, candidate.clone(), candidate_bytes)?;
-    assert_eq!(before.source.mainland_rows, after.source.mainland_rows);
-    assert_eq!(before.coast, after.coast, "coast/depth field is unchanged");
+    if before.source.mainland_rows != after.source.mainland_rows {
+        return Err("upper mountain study changed the mainland footprint".into());
+    }
+    if before.coast != after.coast {
+        return Err("upper mountain study changed the coast/depth field".into());
+    }
     let mut columns = BufWriter::new(File::create(output.join("columns.csv"))?);
     writeln!(columns, "q,r,model_east,model_north,baseline_surface,candidate_surface,baseline_top,candidate_top,baseline_water_top,candidate_water_top")?;
     let mut count = 0_usize;
