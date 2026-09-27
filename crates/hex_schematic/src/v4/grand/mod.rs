@@ -15,7 +15,7 @@ mod r02;
 mod r02_overview;
 mod r02_sites;
 pub use geography::{GrandGeography, GrandGeographyDocument};
-use geography::{GrandRegion, LandmarkFrame, SupportLayer, TreeDimensions};
+use geography::{LandmarkFrame, SupportLayer};
 mod library_finish;
 pub use biomes::GrandBiomeMap;
 pub use flow::RIVER_PHASE_DIRECTION;
@@ -335,20 +335,45 @@ impl GrandCompiler {
             || nearest_hex(-201., -524.),
             |d| geography.world_hex(d.ascent.center),
         );
-        let mut candidates = Vec::new();
-        for q in -95_i64..=95 {
-            for r in -95_i64..=95 {
-                if q.abs().max(r.abs()).max((q + r).abs()) <= 95 {
-                    candidates.push((q * q + q * r + r * r, q, r));
+        let crystal: std::collections::BTreeSet<_> = if let Some(d) = &geography.document {
+            let radius = (geography.length(d.ascent.outer_apothem) * 1.16 / 1.5).ceil() as i64 + 2;
+            let mut footprint = std::collections::BTreeSet::new();
+            for q in -radius..=radius {
+                for r in -radius..=radius {
+                    let p = WorldHex::new(root.q + q, root.r + r);
+                    if oracle::crystal_distance(d, geography.model_xz(p)) < d.ascent.outer_apothem {
+                        footprint.insert(p);
+                    }
                 }
             }
+            footprint
+        } else {
+            let mut candidates = Vec::new();
+            for q in -95_i64..=95 {
+                for r in -95_i64..=95 {
+                    if q.abs().max(r.abs()).max((q + r).abs()) <= 95 {
+                        candidates.push((q * q + q * r + r * r, q, r));
+                    }
+                }
+            }
+            candidates.sort();
+            candidates
+                .into_iter()
+                .take(source.canonical_crystal_columns * 7)
+                .map(|(_, q, r)| WorldHex::new(root.q + q, root.r + r))
+                .collect()
+        };
+        let crystal_columns = crystal.len();
+        if geography
+            .document
+            .as_ref()
+            .is_some_and(|d| crystal_columns != d.ascent.expected_columns)
+        {
+            return Err(ContractError::new(
+                "grand.crystal",
+                "actual outer feature polygon differs from authored measured count",
+            ));
         }
-        candidates.sort();
-        let crystal = candidates
-            .into_iter()
-            .take(source.canonical_crystal_columns * 7)
-            .map(|(_, q, r)| WorldHex::new(root.q + q, root.r + r))
-            .collect();
         let source_fingerprint =
             hash_serializable(&(&source, geography_bytes, &geography.document))?;
         let layered = r02::Layered::compile(&geography)?;
@@ -359,7 +384,7 @@ impl GrandCompiler {
             geography,
             materials: palette(),
             mainland_columns: count,
-            crystal_columns: 22183,
+            crystal_columns,
             tree_count: 0,
             forest: None,
             ground_cover: None,

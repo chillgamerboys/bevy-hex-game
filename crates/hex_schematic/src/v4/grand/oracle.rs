@@ -13,6 +13,14 @@ fn noise(x: f64, z: f64) -> f64 {
         + 0.45 * (x * 0.034 - z * 0.013).sin()
         + 0.3 * (z * 0.051 + x * 0.025).cos()
 }
+/// Shared actual hexagonal Crystal feature boundary, including its enclosing rock.
+pub(super) fn crystal_distance(d: &GrandGeographyDocument, point: [f64; 2]) -> f64 {
+    let dx = point[0] - d.ascent.center[0];
+    let dz = point[1] - d.ascent.center[1];
+    dx.abs()
+        .max((0.5 * dx + 0.866025403784 * dz).abs())
+        .max((0.5 * dx - 0.866025403784 * dz).abs())
+}
 /// Signed continuous mainland relief; positive land is measured before carving.
 pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
     let co = &d.coast;
@@ -104,6 +112,17 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
         let blend = clamp((1.4 - rr) / 0.6);
         h = h * (1. - blend) + (level + 1.5 * noise(x, z)) * blend;
     }
+    // The whole ascent includes its enclosing rock. This source-owned envelope
+    // blends into the mountain shoulder; the smaller well is carved below.
+    let ascent = &d.ascent;
+    let distance = crystal_distance(d, [x, z]);
+    if distance >= ascent.well_apothem && distance < ascent.outer_apothem {
+        let weight = smooth(
+            (ascent.outer_apothem - distance) / (ascent.outer_apothem - ascent.well_apothem),
+        );
+        let crest = ascent.top + 12. + 5. * noise(x, z);
+        h = h.max(h * (1. - weight) + crest * weight);
+    }
     let fr = &d.frozen_route;
     let (dist, y, _) = route_distance([x, z], &fr.points);
     let blend = smooth((fr.forest_half_width - dist) / 43.)
@@ -156,8 +175,9 @@ pub(super) fn volcano(d: &GrandGeographyDocument, point: [f64; 2]) -> f64 {
     }
     let mut h = v.height * clamp(1. - r).powf(1.45) - 5. + 16. * clamp(1. - r / 0.95);
     let cr = ellipse(point, v.center, d.caldera.radii);
-    let rim =
-        185. + 22. * ((point[1] - v.center[1]).atan2(point[0] - v.center[0]) * 3. + 0.6).sin();
+    let rim = d.caldera.rim
+        + d.caldera.amplitude
+            * ((point[1] - v.center[1]).atan2(point[0] - v.center[0]) * 3. + 0.6).sin();
     if cr < 1.3 {
         h = h.max(rim * clamp((1.3 - cr) / 0.3));
     }

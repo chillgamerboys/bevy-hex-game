@@ -24,6 +24,10 @@ struct Receipt {
     canonical_mainland_columns: usize,
     crystal_columns: usize,
     canonical_crystal_columns: usize,
+    crystal_target_columns: usize,
+    crystal_authored_columns: usize,
+    crystal_area_ratio: f64,
+    crystal_footprint_basis: &'static str,
     sailing_reference_seconds: f64,
     sailing_reference_wind_speed: f64,
     sailing_reference_integrated_units: f64,
@@ -134,6 +138,15 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
         canonical_mainland_columns: compiler.source.canonical_mainland_columns,
         crystal_columns: compiler.crystal_columns,
         canonical_crystal_columns: compiler.source.canonical_crystal_columns,
+        crystal_target_columns: compiler.source.canonical_crystal_columns * 7,
+        crystal_authored_columns: compiler.crystal_columns,
+        crystal_area_ratio: compiler.crystal_columns as f64
+            / compiler.source.canonical_crystal_columns as f64,
+        crystal_footprint_basis: if compiler.source.geography.is_some() {
+            "authored_outer_hex"
+        } else {
+            "legacy_reserved_footprint"
+        },
         sailing_reference_seconds: 45.0,
         sailing_reference_wind_speed: 9.0,
         sailing_reference_integrated_units: 793.9485,
@@ -162,7 +175,10 @@ mod tests {
         let bytes = include_bytes!("../../../assets/config/v4/grand-v4/geography-r02.json");
         let compiler = GrandCompiler::with_geography(spec, serde_json::from_slice(bytes)?, bytes)?;
         assert_eq!(compiler.mainland_columns, 653282);
-        assert_eq!(compiler.crystal_columns, 22183);
+        // The original reference is the entire radius-32 feature (3169 cells),
+        // not its hollow well. A clean authored polygon rounds to +0.081% of 7x.
+        assert_eq!(compiler.crystal_columns, 22201);
+        assert!((compiler.crystal_columns as f64 / (3169. * 7.) - 1.).abs() < 0.002);
         let sites = serde_json::to_value(compiler.sites(0)?)?;
         let overview = compiler.overview();
         let inland = overview

@@ -365,6 +365,12 @@ impl GrandCompiler {
         } else {
             "moss"
         };
+        if self.crystal.contains(&p)
+            && oracle::crystal_distance(d, point) >= d.ascent.well_apothem
+            && material != "snow"
+        {
+            material = "slate";
+        }
         if self.geography.frozen_planting_weight(p) > 0. && h > 180. && h < 255. {
             material = "snow";
         }

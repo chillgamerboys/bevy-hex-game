@@ -375,7 +375,9 @@
     "turns": 1.5,
     "width": 16,
     "riser": 0.35,
-    "temple_radius": 27
+    "temple_radius": 27,
+    "outer_apothem": 146.0,
+    "expected_columns": 22201
   },
   "frozen_route": {
     "width": 24,
@@ -538,7 +540,7 @@
     ],
     "sea_top": 400
   },
-  "calibration": "Largest six-neighbor continuous-r02 mainland sampled at production hex centers:653282 mainland columns; separate53-column islet excluded. Independent Crystal reservation22183. Ocean gap geometric800u, not a boat benchmark.",
+  "calibration": "Largest six-neighbor continuous-r02 mainland sampled at production hex centers:653282 mainland columns; separate53-column islet excluded. Crystal whole-feature outer hex apothem146 yields22201 actual columns versus canonical radius32 disk3169 and 7x target22183 (7.00568x; +0.081% discrete boundary rounding); well112/stair98 retained. Ocean gap geometric800u, not a boat benchmark.",
   "frames": {
     "world_tree": {
       "origin": [

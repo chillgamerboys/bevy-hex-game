@@ -98,6 +98,8 @@ shape!(Ascent {
     base: f64,
     top: f64,
     well_apothem: f64,
+    outer_apothem: f64,
+    expected_columns: usize,
     stair_radius: f64,
     turns: f64,
     width: f64,
@@ -197,8 +199,10 @@ impl GrandGeographyDocument {
             || !path(&self.shadow_route)
             || !path(&self.frozen_route.points)
             || !path(&self.volcano_route.local_points)
+            || !(1000..=50000).contains(&self.ascent.expected_columns)
             || !(5. ..=40.).contains(&self.ascent.width)
             || !(20. ..=160.).contains(&self.ascent.well_apothem)
+            || !(self.ascent.well_apothem + 8. ..=200.).contains(&self.ascent.outer_apothem)
             || !(10. ..self.ascent.well_apothem).contains(&self.ascent.stair_radius)
             || !(self.ascent.base..=400.).contains(&self.ascent.top)
             || self
@@ -247,17 +251,6 @@ pub(super) enum SupportLayer {
     LibraryUpper,
     Shadow,
     RootTemple,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum GrandRegion {
-    Mainland,
-    CrystalAscent,
-    FrozenWoods,
-    Forest,
-    GardenIsland,
-    UpperLake,
-    ValleyLake,
-    Volcano,
 }
 /// Final runtime bounds, including unequal outer crown lobes.
 #[derive(Clone, Copy, Debug)]
@@ -397,40 +390,6 @@ impl GrandGeography {
             transform: d.transform,
         })
     }
-    pub(super) fn region_contains(&self, region: GrandRegion, p: WorldHex) -> bool {
-        let Some(d) = &self.document else {
-            return false;
-        };
-        let point = self.model_xz(p);
-        match region {
-            GrandRegion::Mainland => ellipse(point, d.coast.center, d.coast.radii) < 1.2,
-            GrandRegion::CrystalAscent => ellipse(point, d.ascent.center, [145., 145.]) < 1.,
-            GrandRegion::FrozenWoods => {
-                route_distance(point, &d.frozen_route.points).0 < d.frozen_route.forest_half_width
-            }
-            GrandRegion::Forest => self.forest_density(p) > 0.,
-            GrandRegion::GardenIsland => ellipse(point, d.garden.center, d.garden.radii) < 1.,
-            GrandRegion::UpperLake => {
-                irregular(
-                    point,
-                    d.upper_lake.center,
-                    d.upper_lake.radii,
-                    d.upper_lake.phase,
-                ) < 1.
-            }
-            GrandRegion::ValleyLake => {
-                irregular(
-                    point,
-                    d.lower_lake.center,
-                    d.lower_lake.radii,
-                    d.lower_lake.phase,
-                ) < 1.
-            }
-            GrandRegion::Volcano => {
-                irregular(point, d.volcano.center, d.volcano.radii, d.volcano.phase) < 1.2
-            }
-        }
-    }
     pub(super) fn forest_density(&self, p: WorldHex) -> f64 {
         let Some(d) = &self.document else {
             return 0.;
@@ -503,6 +462,12 @@ impl GrandCompiler {
         frame: &LandmarkFrame,
         local: [f64; 2],
     ) -> Result<VoxelPosition, ContractError> {
+        if frame.layer != SupportLayer::Exterior && frame.floor.is_none() {
+            return Err(ContractError::new(
+                "grand.geography",
+                "named interior layer needs an explicit floor",
+            ));
+        }
         let p = frame.hex(local);
         let (c, _) = self.column(p);
         let expected = frame.floor.map(|y| self.geography.top_level(y));
