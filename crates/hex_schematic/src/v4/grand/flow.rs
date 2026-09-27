@@ -189,11 +189,27 @@ impl GrandCompiler {
                     connected.insert(p);
                 }
             }
-            if let Some(liquid) = water.values().find(|l| !connected.contains(&l.column)) {
+            if let Some(liquid) = water
+                .values()
+                .filter(|l| !connected.contains(&l.column))
+                .max_by(|a, b| r02_progress(a.column).total_cmp(&r02_progress(b.column)))
+            {
+                let neighbors: Vec<_> = DIRS
+                    .into_iter()
+                    .map(|(q, r)| {
+                        let p = WorldHex::new(liquid.column.q + q, liquid.column.r + r);
+                        (
+                            p,
+                            self.column(p).1.map(|l| l.top),
+                            connected.contains(&p),
+                            r02_progress(p) > r02_progress(liquid.column),
+                        )
+                    })
+                    .collect();
                 return Err(ContractError::new(
                     "grand.flow",
                     format!(
-                        "reach {reach} cannot drain from {:?}, model {:?}, surface {} to its receiver",
+                        "reach {reach} cannot drain from {:?}, model {:?}, surface {} to its receiver; neighbors(column, water, connected, forward)={neighbors:?}",
                         liquid.column,
                         self.geography.model_xz(liquid.column),
                         liquid.top

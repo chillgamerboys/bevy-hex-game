@@ -79,3 +79,18 @@ respects authored occupancy; a full-composition overlap regression and both affe
 chunks pass. A fresh immutable package, all eleven walking routes, measured sailing,
 36-view static matrix, temporal sequences, combined CI and native play remain
 required. This entry records corrective work, not acceptance of the expedition.
+
+## September 26 — first actual revision02 plain render
+
+The user found the general mountain shapes too steep, with bases that appear
+untraversable. This applies beyond the square summit and raised tunnel strips
+caused by cave-cover inflation. Broaden the mountain feet into connected gentle
+aprons, retain steep upper scenic faces and the peaks enclosing the hidden lake,
+and test cross-country access across the entire dry foothill belt. Forest-only
+grade statistics and isolated passing route centerlines do not clear this concern.
+
+The first actual package (`compiled-r02-plain-01`, source4ad2b82d) preserves broad
+landmark relationships but fails visual transfer: cave cover distorts the massif,
+water-adjacent exact terrain differs sharply from the smooth distant proxy, and
+the fall camera cannot show the complete plunge. These are diagnostic renders,
+not an accepted terrain or completed presentation checkpoint.
