@@ -1,6 +1,6 @@
 //! One source-owned coordinate frame for the approved revision-02 geography.
 //! Model local coordinates are east/north; runtime north is negative Z.
-use super::{nearest_hex, world_xz, GrandCompiler, LEVEL_HEIGHT, SEA_TOP};
+use super::{GrandCompiler, LEVEL_HEIGHT, SEA_TOP, nearest_hex, world_xz};
 use hex_world_contracts::{ContractError, VoxelPosition, WorldHex};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -70,11 +70,13 @@ shape!(Foothills {
     radius_multiplier: f64,
     minimum_radius: f64,
     apron_relief: f64,
-    base_level: f64,
-    compressed_height: f64,
-    restored_height: f64,
-    compression: f64,
-    toe_blend_height: f64,
+    core_setback: f64,
+    core_power: f64,
+    shore_grade: f64,
+    core_shore_blend: f64,
+    base_noise: f64,
+    basin_south_blend: [f64; 2],
+    shore_headlands: Vec<[f64; 5]>,
     coast_noise_fade: [f64; 2]
 });
 shape!(Coast {center:[f64;2],radii:[f64;2],phase:f64,coves:Vec<[f64;4]>});
@@ -166,11 +168,18 @@ impl GrandGeographyDocument {
         let f = &self.foothills;
         if !(1. ..=3.).contains(&f.radius_multiplier)
             || !(100. ..=1000.).contains(&f.minimum_radius)
-            || !(1. ..=100.).contains(&f.apron_relief)
-            || !(0. ..f.compressed_height).contains(&f.base_level)
-            || !(f.compressed_height + 1. ..=300.).contains(&f.restored_height)
-            || !(0.01..=1.).contains(&f.compression)
-            || !(0.1..=10.).contains(&f.toe_blend_height)
+            || !(1. ..=150.).contains(&f.apron_relief)
+            || !(0.25..=1.).contains(&f.core_setback)
+            || !(1. ..=4.).contains(&f.core_power)
+            || !(0.05..=0.5).contains(&f.shore_grade)
+            || !(20. ..=200.).contains(&f.core_shore_blend)
+            || !(0. ..=3.).contains(&f.base_noise)
+            || !(f.basin_south_blend[0] + 1. ..=1200.).contains(&f.basin_south_blend[1])
+            || !f.basin_south_blend[0].is_finite()
+            || f.shore_headlands.len() > 8
+            || f.shore_headlands.iter().any(|v| {
+                !position([v[0], v[1]]) || !(0. ..=0.6).contains(&v[2]) || !radii([v[3], v[4]])
+            })
             || !(0. ..f.coast_noise_fade[1]).contains(&f.coast_noise_fade[0])
             || !(0.1..=0.8).contains(&f.coast_noise_fade[1])
             || !bounded(self.frames.len(), 1, 128)

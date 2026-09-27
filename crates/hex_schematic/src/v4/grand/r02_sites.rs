@@ -9,8 +9,8 @@ const ENCOUNTERS: &[(&str, [f64; 2], Option<f64>)] = &[
     ("grand_goblin_05", [-100., -260.], None),
     ("grand_goblin_06", [90., -55.], None),
     ("grand_shaman_01", [195., -45.], None),
-    ("grand_golem_01", [-460., 500.], Some(135.)),
-    ("grand_wisp_01", [-470., 485.], Some(300.)),
+    ("grand_golem_01", [-460., 500.], None),
+    ("grand_wisp_01", [-470., 485.], None),
     ("grand_worm_01", [-205., 525.], Some(65.)),
     ("grand_worm_02", [-140., 585.], Some(65.)),
     ("grand_worm_03", [-170., 570.], Some(65.)),
@@ -170,6 +170,11 @@ impl GrandCompiler {
         let mut encounters = Vec::new();
         let mut failures = Vec::new();
         for (id, point, height) in definitions {
+            let height = match id {
+                "grand_golem_01" => self.geography.frame("library_lower")?.floor,
+                "grand_wisp_01" => self.geography.frame("library_upper")?.floor,
+                _ => height,
+            };
             let preferred = self.r02_support(point, height)?;
             let mut surfaces = Vec::new();
             for q in -10_i64..=10 {

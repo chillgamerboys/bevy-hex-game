@@ -1,5 +1,10 @@
 //! Layered production solids and clear routes from the shared geography document.
 use super::*;
+/// Each layer and presentation samples the same conservative physical distance
+/// through the exact connected coast. One graph step spans at least1.5worldu.
+fn coast_distance(coast: &[u16], p: WorldHex) -> f64 {
+    f64::from(grid_value(coast, p, 0)) * 1.5
+}
 #[derive(Clone, Copy)]
 pub(super) struct ClearLayer {
     pub top: i32,
@@ -107,6 +112,7 @@ impl Layered {
     fn route(
         &mut self,
         g: &GrandGeography,
+        coast: &[u16],
         id: &str,
         from: &str,
         to: &str,
@@ -138,6 +144,19 @@ impl Layered {
         }
         let mut ribbon = Vec::new();
         for (p, mut choices) in candidates {
+            // End the Crystal ribbon at its shared exit cross-section.
+            // A rounded cap beyond this line belongs to Frozen's departing
+            // surface and must not publish obsolete lower stair supports.
+            if id == "crystal_ascent" {
+                if let Some(end) = points.last() {
+                    let point = g.model_xz(p);
+                    if (point[0] - end[0]).hypot(point[1] - end[2]) < width
+                        && point[1] > end[2] + 0.5
+                    {
+                        continue;
+                    }
+                }
+            }
             // A flat start cap meets the final Crystal tread without a
             // rounded platform overhanging several earlier stair treads.
             if id == "frozen_shore" {
@@ -160,7 +179,10 @@ impl Layered {
             let mut clusters: Vec<Vec<(i32, f64)>> = Vec::new();
             for c in choices {
                 if let Some(last) = clusters.last_mut() {
-                    if last.last().is_some_and(|old| c.0 - old.0 <= 5) {
+                    // Overlapping samples of one bend form a single surface.
+                    // Two2-level slabs need8clear levels between them to be
+                    // distinct traversable stories; closer proposals coalesce.
+                    if last.last().is_some_and(|old| c.0 - old.0 < 10) {
                         last.push(c);
                         continue;
                     }
@@ -171,9 +193,22 @@ impl Layered {
                 let Some(&(top, _)) = cluster.iter().min_by(|a, b| a.1.total_cmp(&b.1)) else {
                     continue;
                 };
+                // Where a ribbon edge enters its room across an ordinary
+                // one-level threshold, the room floor is the composed support.
+                // Publish that floor rather than a buried pre-union stair cap.
+                let top = self
+                    .columns
+                    .get(&p)
+                    .into_iter()
+                    .flatten()
+                    .find(|room| room.layer == layer && !room.open && room.top.abs_diff(top) <= 1)
+                    .map_or(top, |room| room.top);
                 let xz = g.model_xz(p);
                 let natural_top = g.document.as_ref().map_or(top, |d| {
-                    g.top_level(oracle::mainland(d, xz).max(oracle::volcano(d, xz)))
+                    g.top_level(
+                        oracle::mainland(d, xz, coast_distance(coast, p))
+                            .max(oracle::volcano(d, xz)),
+                    )
                 });
                 // A passage can emerge through its intended terminal when the
                 // natural cover ends. It must never extrude a ridge to hide it.
@@ -190,9 +225,19 @@ impl Layered {
                             for r in -3_i64..=3 {
                                 if q.abs().max(r.abs()).max((q + r).abs()) <= 3 {
                                     let point = g.model_xz(WorldHex::new(p.q + q, p.r + r));
-                                    minimum = minimum.min(g.top_level(
-                                        oracle::mainland(d, point).max(oracle::volcano(d, point)),
-                                    ));
+                                    minimum = minimum.min(
+                                        g.top_level(
+                                            oracle::mainland(
+                                                d,
+                                                point,
+                                                coast_distance(
+                                                    coast,
+                                                    WorldHex::new(p.q + q, p.r + r),
+                                                ),
+                                            )
+                                            .max(oracle::volcano(d, point)),
+                                        ),
+                                    );
                                 }
                             }
                         }
@@ -224,7 +269,7 @@ impl Layered {
         });
         Ok(())
     }
-    pub fn compile(g: &GrandGeography) -> Result<Self, ContractError> {
+    pub fn compile(g: &GrandGeography, coast: &[u16]) -> Result<Self, ContractError> {
         let Some(d) = &g.document else {
             return Ok(Self::default());
         };
@@ -241,6 +286,7 @@ impl Layered {
         }
         out.route(
             g,
+            coast,
             "crystal_ascent",
             "crystal_ascent",
             "frozen_woods",
@@ -252,6 +298,7 @@ impl Layered {
         )?;
         out.route(
             g,
+            coast,
             "frozen_shore",
             "frozen_woods",
             "mountain_lake",
@@ -263,6 +310,7 @@ impl Layered {
         )?;
         out.route(
             g,
+            coast,
             "volcano_ascent",
             "volcano_landing",
             "shrine_fire",
@@ -274,6 +322,7 @@ impl Layered {
         )?;
         out.route(
             g,
+            coast,
             "shadow_tunnel",
             "shadow_entrance",
             "crystal_ascent",
@@ -303,6 +352,7 @@ impl Layered {
         for (id, route) in &d.layer_routes {
             out.route(
                 g,
+                coast,
                 id,
                 &route.from,
                 &route.to,
@@ -324,7 +374,10 @@ impl Layered {
                         let n = WorldHex::new(p.q + q, p.r + r);
                         let top = *natural.entry(n).or_insert_with(|| {
                             let point = g.model_xz(n);
-                            g.top_level(oracle::mainland(d, point).max(oracle::volcano(d, point)))
+                            g.top_level(
+                                oracle::mainland(d, point, coast_distance(coast, n))
+                                    .max(oracle::volcano(d, point)),
+                            )
                         });
                         neighborhood.push((n, top));
                     }
@@ -354,7 +407,7 @@ impl GrandCompiler {
             return terrain::surface(self, p);
         };
         let point = self.geography.model_xz(p);
-        let mainland = oracle::mainland(d, point);
+        let mainland = oracle::mainland(d, point, coast_distance(&self.coast, p));
         let volcano = oracle::volcano(d, point);
         let mut h = mainland.max(volcano);
         let mut water = oracle::water(d, point, h);
@@ -513,20 +566,20 @@ mod cave_cover_tests {
     use super::*;
     #[test]
     fn closed_cave_cover_never_inflates_approved_landforms() {
-        let document = serde_json::from_str(include_str!(
-            "../../../../../assets/config/v4/grand-v4/geography-r02.json"
-        ))
-        .expect("canonical geography");
-        let g = GrandGeography::new(document).expect("valid source geometry");
-        let layered = Layered::compile(&g).expect("actual authored layered geometry");
+        let compiler = tests::compiler(false);
+        let g = &compiler.geography;
+        let layered = &compiler.layered;
+        let coast = &compiler.coast;
         let d = g.document.as_ref().expect("canonical geography");
         let failures: Vec<_> = layered
             .cover
             .iter()
             .filter_map(|(&p, &required)| {
                 let point = g.model_xz(p);
-                let natural =
-                    g.top_level(oracle::mainland(d, point).max(oracle::volcano(d, point)));
+                let natural = g.top_level(
+                    oracle::mainland(d, point, coast_distance(coast, p))
+                        .max(oracle::volcano(d, point)),
+                );
                 (required > natural).then_some((p, required, natural))
             })
             .collect();
@@ -551,19 +604,52 @@ mod cave_cover_tests {
         );
     }
     #[test]
+    fn all_authored_route_ribbons_keep_full_body_clearance() {
+        let compiler = tests::compiler(false);
+        let mut failures = Vec::new();
+        for route in &compiler.layered.routes {
+            let blocked: Vec<_> = route
+                .ribbon
+                .iter()
+                .filter(|p| !compiler.clear_support(**p, 8))
+                .collect();
+            println!(
+                "R02_RIBBON {} columns={} blocked={}",
+                route.id,
+                route.ribbon.len(),
+                blocked.len()
+            );
+            if !blocked.is_empty() {
+                failures.push(format!(
+                    "{}: {} blocked; first {:?}",
+                    route.id,
+                    blocked.len(),
+                    blocked
+                        .iter()
+                        .take(12)
+                        .map(|p| (
+                            p,
+                            compiler.geography.model_xz(p.column),
+                            compiler.column(p.column).0.runs
+                        ))
+                        .collect::<Vec<_>>()
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
     fn library_stairs_do_not_dam_the_main_plunge_receiving_pool() {
-        let document = serde_json::from_str(include_str!(
-            "../../../../../assets/config/v4/grand-v4/geography-r02.json"
-        ))
-        .expect("canonical geography");
-        let g = GrandGeography::new(document).expect("source geometry");
-        let layered = Layered::compile(&g).expect("actual layered geometry");
+        let compiler = tests::compiler(false);
+        let g = &compiler.geography;
+        let layered = &compiler.layered;
         let d = g.document.as_ref().expect("document");
         let center = g.world_hex([494., 442.]);
         for (q, r) in DIRS.into_iter().chain(std::iter::once((0, 0))) {
             let p = WorldHex::new(center.q + q, center.r + r);
             let point = g.model_xz(p);
-            let bed = oracle::mainland(d, point);
+            let bed = oracle::mainland(d, point, coast_distance(&compiler.coast, p));
             let water = oracle::water(d, point, bed).expect("receiving pool is wet");
             let bed = g.top_level(bed);
             let water = g.top_level(water);

@@ -1,6 +1,6 @@
 //! Continuous approved landforms, sampled at production hex resolution.
 //! No 12-unit study-grid stair steps enter the playable terrain.
-use super::geography::{ellipse, irregular, route_distance, segment, GrandGeographyDocument};
+use super::geography::{GrandGeographyDocument, ellipse, irregular, route_distance, segment};
 fn clamp(x: f64) -> f64 {
     x.clamp(0., 1.)
 }
@@ -23,6 +23,7 @@ pub(super) fn crystal_distance(d: &GrandGeographyDocument, point: [f64; 2]) -> f
 }
 /// Broad source-owned mountain apron. It is shared with surface acceptance;
 /// this mask does not select particular routes or omit awkward joins.
+#[cfg(test)]
 pub(super) fn foothill_weight(d: &GrandGeographyDocument, point: [f64; 2]) -> f64 {
     let f = &d.foothills;
     let mut apron: f64 = 0.;
@@ -55,25 +56,13 @@ pub(super) fn foothill_weight(d: &GrandGeographyDocument, point: [f64; 2]) -> f6
 }
 /// Complete broad base envelope; water and cave overlaps are reported separately
 /// by final-column surveys rather than removed from this authoring region.
+#[cfg(test)]
 pub(super) fn foothill_region(d: &GrandGeographyDocument, point: [f64; 2]) -> bool {
     foothill_weight(d, point) > 0.01
 }
-fn foothill_height(d: &GrandGeographyDocument, point: [f64; 2], h: f64) -> f64 {
-    let f = &d.foothills;
-    if h <= f.base_level || h >= f.restored_height || !foothill_region(d, point) {
-        return h;
-    }
-    let delta = h - f.base_level;
-    // The exponential toe keeps both value and first derivative continuous.
-    let lower = f.base_level
-        + delta * f.compression
-        + (1. - f.compression) * f.toe_blend_height * (1. - (-delta / f.toe_blend_height).exp());
-    let restore = smooth((h - f.compressed_height) / (f.restored_height - f.compressed_height));
-    let target = lower + (h - lower) * restore;
-    h + (target - h) * foothill_weight(d, point)
-}
-/// Signed continuous mainland relief; positive land is measured before carving.
-pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
+/// Frozen continuous landform intersection defines the approved coast. The
+/// spatial relief below changes its interior profile, not its positive domain.
+pub(super) fn coast_reference(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
     let co = &d.coast;
     let r = ellipse([x, z], co.center, co.radii);
     let a = (z - co.center[1]).atan2(x);
@@ -127,6 +116,93 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
         }
     }
     h += high + land * hills;
+    finish_terrain(d, [x, z], h)
+}
+
+/// Actual mountain interior: broad gentle aprons support smaller steep cores.
+/// Coast distance comes from the same exact measured hex footprint used by the
+/// compiler; cave cover, detailed columns and overview all call this sampler.
+pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_distance: f64) -> f64 {
+    if coast_distance <= 0. {
+        return coast_reference(d, [x, z]);
+    }
+    let f = &d.foothills;
+    let co = &d.coast;
+    let r = ellipse([x, z], co.center, co.radii);
+    let angle = (z - co.center[1]).atan2(x - co.center[0]);
+    let shore = 1.
+        + 0.055 * (5. * angle + co.phase).sin()
+        + 0.035 * (9. * angle + 0.3).cos()
+        + 0.025 * (13. * angle).sin();
+    let [fade_start, fade_end] = f.coast_noise_fade;
+    let coastal = 1. + (shore - 1.) * smooth((r - fade_start) / (fade_end - fade_start));
+    let mut base = 42. * (coastal - r) + f.base_noise * noise(x, z);
+    for &[cx, cz, rx, rz] in &co.coves {
+        base -= 35. * (-2. * ellipse([x, z], [cx, cz], [rx, rz]).powi(2)).exp();
+    }
+    for &[cx, cz, height, rx, rz] in &d.low_hills {
+        base += height * (-ellipse([x, z], [cx, cz], [rx, rz]).powi(2)).exp();
+    }
+    base = base.max((coast_distance * 0.07).min(12.));
+    let mut apron: f64 = 0.;
+    let mut core: f64 = 0.;
+    for (i, &[cx, cz, height, rx, rz]) in std::iter::once(&d.massif).chain(&d.peaks).enumerate() {
+        let radii = [
+            (rx * f.radius_multiplier).max(f.minimum_radius),
+            (rz * f.radius_multiplier).max(f.minimum_radius),
+        ];
+        apron = apron.max(f.apron_relief * smooth(1. - ellipse([x, z], [cx, cz], radii)));
+        let angle = (z - cz).atan2(x - cx);
+        let radius = ellipse([x, z], [cx, cz], [rx * f.core_setback, rz * f.core_setback])
+            / (1. + 0.10 * (3. * angle + i as f64).sin() + 0.04 * (5. * angle).cos());
+        core = core.max((height - f.apron_relief).max(0.) * clamp(1. - radius).powf(f.core_power));
+    }
+    let mut ridge = |a: [f64; 4], b: [f64; 4]| {
+        let (distance, t) = segment([x, z], [a[0], a[1]], [b[0], b[1]]);
+        let crest = a[2] * (1. - t) + b[2] * t;
+        let width = a[3] * (1. - t) + b[3] * t;
+        let radius = (width * f.radius_multiplier).max(f.minimum_radius);
+        apron = apron.max(f.apron_relief * smooth(1. - distance / radius));
+        core = core.max(
+            (crest - f.apron_relief).max(0.)
+                * clamp(1. - distance / (width * f.core_setback)).powf(f.core_power),
+        );
+    };
+    for &[i, j] in &d.ridge_links {
+        if let (Some(a), Some(b)) = (d.peaks.get(i), d.peaks.get(j)) {
+            ridge([a[0], a[1], a[2], 170.], [b[0], b[1], b[2], 170.]);
+        }
+    }
+    for path in &d.landform_ridges {
+        for pair in path.windows(2) {
+            if let (Some(&a), Some(&b)) = (pair.first(), pair.get(1)) {
+                ridge(a, b);
+            }
+        }
+    }
+    // These are supporting mountain bodies, not isolated summit cones. The
+    // basin backing fades before the lower-lake foot, leaving that broad
+    // shoulder intact while joining the high shore to the enclosing peaks.
+    let [cx, cz, height, rx, rz] = d.headland;
+    let [south, north] = f.basin_south_blend;
+    core = core.max(
+        height
+            * (-1.35 * ellipse([x, z], [cx, cz], [rx, rz]).powi(2)).exp()
+            * smooth((z - south) / (north - south)),
+    );
+    for &[cx, cz, height, rx, rz] in &d.site_shoulders {
+        core = core.max(height * (-1.35 * ellipse([x, z], [cx, cz], [rx, rz]).powi(2)).exp());
+    }
+    let mut grade = f.shore_grade;
+    for &[cx, cz, extra, rx, rz] in &f.shore_headlands {
+        grade += extra * (-2. * ellipse([x, z], [cx, cz], [rx, rz]).powi(2)).exp();
+    }
+    let low = base.max(apron).min(coast_distance * grade);
+    let height = low + core * smooth(coast_distance / f.core_shore_blend);
+    finish_terrain(d, [x, z], height)
+}
+
+fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], mut h: f64) -> f64 {
     let c = d.lower_lake.center;
     let blend = clamp(
         1. - ellipse(
@@ -174,9 +250,6 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
     let sr = ellipse([x, z], landing.center, landing.radii);
     let blend = smooth((1.5 - sr) / 0.5);
     h = h * (1. - blend) + landing.height * blend;
-    // Apply the broad lower profile after all authored shoulder joins. The
-    // positive low coast and elevations above the restoration datum are exact.
-    h = foothill_height(d, [x, z], h);
     for lake in [&d.upper_lake, &d.lower_lake] {
         let r = irregular([x, z], lake.center, lake.radii, lake.phase);
         if r < 1. {
@@ -203,9 +276,9 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
             // lowland was lower than it. Merely taking min leaves deep gaps.
             h = target - 3.;
         } else if dist < bank
-            && ![&d.upper_lake, &d.lower_lake].into_iter().any(|lake| {
-                irregular([x, z], lake.center, lake.radii, lake.phase) < 1.
-            })
+            && ![&d.upper_lake, &d.lower_lake]
+                .into_iter()
+                .any(|lake| irregular([x, z], lake.center, lake.radii, lake.phase) < 1.)
         {
             // A bank must not form a ring dam across the lake at an intake or
             // receiving pool. Gorge reaches also retain a full dry collar:
@@ -222,9 +295,12 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
             // that adjacent water too; this changes the supporting bank only.
             let scale = d.transform.horizontal_scale;
             for [dx, dz] in [
-                [3_f64.sqrt(), 0.], [-3_f64.sqrt(), 0.],
-                [3_f64.sqrt() * 0.5, 1.5], [-3_f64.sqrt() * 0.5, 1.5],
-                [3_f64.sqrt() * 0.5, -1.5], [-3_f64.sqrt() * 0.5, -1.5],
+                [3_f64.sqrt(), 0.],
+                [-3_f64.sqrt(), 0.],
+                [3_f64.sqrt() * 0.5, 1.5],
+                [-3_f64.sqrt() * 0.5, 1.5],
+                [3_f64.sqrt() * 0.5, -1.5],
+                [-3_f64.sqrt() * 0.5, -1.5],
             ] {
                 let (neighbor_distance, neighbor_level, _) =
                     route_distance([x + dx / scale, z + dz / scale], &channel.points);
@@ -316,40 +392,28 @@ mod profile_tests {
     }
 
     #[test]
-    fn broad_foothill_curve_preserves_datums_and_has_smooth_joins() {
+    fn spatial_aprons_keep_the_coast_domain_and_lowland_foot() {
         let d = document();
-        let p = [d.massif[0], d.massif[1]];
-        let f = &d.foothills;
-        for height in [-10., 0., f.base_level, f.restored_height, 425.] {
-            assert!((foothill_height(&d, p, height) - height).abs() < 1e-9);
+        assert!(foothill_region(&d, [d.massif[0], d.massif[1]]));
+        // Reshaping inside the measured coast cannot create an offshore shelf.
+        for p in [[-1100., 0.], [1000., 700.], [0., -650.]] {
+            assert!((mainland(&d, p, 0.) - coast_reference(&d, p)).abs() < 1e-9);
         }
-        for height in [f.base_level, f.compressed_height, f.restored_height] {
-            let step = 0.0001;
-            let center = foothill_height(&d, p, height);
-            let left = (center - foothill_height(&d, p, height - step)) / step;
-            let right = (foothill_height(&d, p, height + step) - center) / step;
-            assert!(
-                (left - right).abs() < 0.001,
-                "slope join at {height}: {left}/{right}"
-            );
-        }
-        let mut previous = foothill_height(&d, p, 0.);
-        for level in 1..=500_u16 {
-            let current = foothill_height(&d, p, f64::from(level));
-            assert!(current > previous, "height transfer folds at {level}");
-            previous = current;
-        }
-        assert!(foothill_height(&d, p, f.compressed_height) < f.apron_relief);
+        // The basin-support body starts above the broad lower-lake approach.
+        let p = [315., 350.];
+        let mut without_basin = d.clone();
+        without_basin.headland[2] = 0.;
+        assert!((mainland(&d, p, 200.) - mainland(&without_basin, p, 200.)).abs() < 1e-9);
     }
 
     #[test]
     fn coast_center_has_no_angular_height_discontinuity() {
         let d = document();
         let [x, z] = d.coast.center;
-        let center = mainland(&d, [x, z]);
+        let center = mainland(&d, [x, z], 350.);
         for direction in 0..32_u16 {
             let angle = f64::from(direction) * std::f64::consts::TAU / 32.;
-            let height = mainland(&d, [x + angle.cos() * 0.001, z + angle.sin() * 0.001]);
+            let height = mainland(&d, [x + angle.cos() * 0.001, z + angle.sin() * 0.001], 350.);
             assert!(
                 (height - center).abs() < 0.01,
                 "directional jump: {height} vs {center}"
@@ -369,7 +433,7 @@ mod profile_tests {
                 (x - t.translation[0]) / t.horizontal_scale,
                 -(z - t.translation[1]) / t.horizontal_scale,
             ];
-            let bed = mainland(&d, point);
+            let bed = mainland(&d, point, 200.);
             if let Some(level) = water(&d, point, bed) {
                 assert!(bed < level);
                 receiving += 1;

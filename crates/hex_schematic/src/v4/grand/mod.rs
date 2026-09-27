@@ -25,7 +25,7 @@ mod terrain;
 mod terrain_tests;
 #[cfg(test)]
 mod tests;
-use super::northern::{nearest_hex, world_xz, IslandSpec, NorthernOverview};
+use super::northern::{IslandSpec, NorthernOverview, nearest_hex, world_xz};
 use hex_world_contracts::*;
 use serde::{Deserialize, Serialize};
 pub use sites::GrandSites;
@@ -212,7 +212,7 @@ impl GrandCompiler {
                     {
                         continue;
                     }
-                    if oracle::mainland(document, point) > 0. {
+                    if oracle::coast_reference(document, point) > 0. {
                         *grid_cell(&mut coast, p)? = u16::MAX;
                     }
                 }
@@ -268,7 +268,10 @@ impl GrandCompiler {
         if count != source.canonical_mainland_columns * 7 {
             return Err(ContractError::new(
                 "grand",
-                format!("mainland must be exactly seven times canonical area: actual {count}, expected {}", source.canonical_mainland_columns * 7),
+                format!(
+                    "mainland must be exactly seven times canonical area: actual {count}, expected {}",
+                    source.canonical_mainland_columns * 7
+                ),
             ));
         }
         let mut queue = VecDeque::new();
@@ -373,7 +376,7 @@ impl GrandCompiler {
         }
         let source_fingerprint =
             hash_serializable(&(&source, geography_bytes, &geography.document))?;
-        let layered = r02::Layered::compile(&geography)?;
+        let layered = r02::Layered::compile(&geography, &coast)?;
         let revision02 = geography.document.is_some();
         let mut result = Self {
             source,
