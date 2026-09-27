@@ -18,6 +18,8 @@ pub struct GrandGeographyDocument {
     pub(super) transform: GeographyTransform,
     pub(super) coast: Coast,
     pub(super) foothills: Foothills,
+    #[serde(default)]
+    pub(super) interior_profile: Option<InteriorProfile>,
     pub(super) massif: [f64; 5],
     pub(super) headland: [f64; 5],
     pub(super) peaks: Vec<[f64; 5]>,
@@ -82,6 +84,12 @@ shape!(Foothills {
     basin_south_blend: [f64; 2],
     shore_headlands: Vec<[f64; 5]>,
     coast_noise_fade: [f64; 2]
+});
+shape!(InteriorProfile {
+    join_width: f64,
+    western_relief: f64,
+    western_radius_multiplier: f64,
+    western_power: f64
 });
 shape!(Coast {center:[f64;2],radii:[f64;2],phase:f64,coves:Vec<[f64;4]>});
 shape!(Ellipse {
@@ -183,7 +191,12 @@ impl GrandGeographyDocument {
                 })
         };
         let f = &self.foothills;
-        if !(1. ..=3.).contains(&f.radius_multiplier)
+        if self.interior_profile.as_ref().is_some_and(|p| {
+            !(1. ..=60.).contains(&p.join_width)
+                || !(150. ..=450.).contains(&p.western_relief)
+                || !(0.75..=1.5).contains(&p.western_radius_multiplier)
+                || !(1. ..=4.).contains(&p.western_power)
+        }) || !(1. ..=3.).contains(&f.radius_multiplier)
             || self.upper_lake_shore.as_ref().is_some_and(|s| {
                 !(2. ..=24.).contains(&s.shelf_width[0])
                     || !(s.shelf_width[0]..=32.).contains(&s.shelf_width[1])

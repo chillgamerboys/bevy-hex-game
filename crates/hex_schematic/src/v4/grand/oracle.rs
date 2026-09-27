@@ -156,7 +156,15 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_dista
         let angle = (z - cz).atan2(x - cx);
         let radius = ellipse([x, z], [cx, cz], [rx * f.core_setback, rz * f.core_setback])
             / (1. + 0.10 * (3. * angle + i as f64).sin() + 0.04 * (5. * angle).cos());
-        core = core.max((height - f.apron_relief).max(0.) * clamp(1. - radius).powf(f.core_power));
+        let relief = if let Some(profile) = d.interior_profile.as_ref().filter(|_| i == 0) {
+            // The western body uses the full authored footprint and a rounded
+            // summit. It must not recover height by adding the apron twice.
+            let radius = radius * f.core_setback / profile.western_radius_multiplier;
+            profile.western_relief * smooth(1. - radius).powf(profile.western_power)
+        } else {
+            (height - f.apron_relief).max(0.) * clamp(1. - radius).powf(f.core_power)
+        };
+        core = core.max(relief);
     }
     let mut ridge = |a: [f64; 4], b: [f64; 4]| {
         let (distance, t) = segment([x, z], [a[0], a[1]], [b[0], b[1]]);
@@ -205,8 +213,25 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_dista
         grade += extra * (-2. * ellipse([x, z], [cx, cz], [rx, rz]).powi(2)).exp();
     }
     let low = base.max(apron).min(coast_distance * grade);
-    let height = low + core * smooth(coast_distance / f.core_shore_blend);
+    let active_core = core * smooth(coast_distance / f.core_shore_blend);
+    let height = d
+        .interior_profile
+        .as_ref()
+        .map_or(low + active_core, |profile| {
+            composed_relief(low, active_core, profile.join_width)
+        });
     finish_terrain(d, [x, z], height)
+}
+
+/// Join the broad foot and upper body without spending the shore slope budget
+/// once for each overlapping landform. The bounded blend is continuous and
+/// vanishes where either component vanishes; its width is capped near the coast.
+fn composed_relief(low: f64, core: f64, join_width: f64) -> f64 {
+    let width = join_width.min(2. * low.min(core).max(0.));
+    if width <= f64::EPSILON {
+        return low.max(core);
+    }
+    low.max(core) + (width - (low - core).abs()).max(0.).powi(2) / (4. * width)
 }
 
 fn finish_terrain(d: &GrandGeographyDocument, [x, z]: [f64; 2], h: f64) -> f64 {
@@ -336,6 +361,7 @@ fn finish_terrain_profiled(
             // below the water immediately upstream across a hex edge. Retain
             // that adjacent water too; this changes the supporting bank only.
             let scale = d.transform.horizontal_scale;
+            let mut adjacent_water: Option<f64> = None;
             for [dx, dz] in [
                 [3_f64.sqrt(), 0.],
                 [-3_f64.sqrt(), 0.],
@@ -348,9 +374,19 @@ fn finish_terrain_profiled(
                     route_distance([x + dx / scale, z + dz / scale], &channel.points);
                 if neighbor_distance < half {
                     retained_bank = retained_bank.max(neighbor_level + 0.35 * (1. - ordinary));
+                    adjacent_water =
+                        Some(adjacent_water.map_or(neighbor_level, |old| old.max(neighbor_level)));
                 }
             }
             h = h * (1. - blend) + retained_bank * blend;
+            if profiles {
+                // The transition may approach lower natural ground, but the
+                // first dry column still contains its actual wet neighbour.
+                // Blending this bound away can cross a voxel rounding boundary.
+                if let Some(level) = adjacent_water {
+                    h = h.max(level);
+                }
+            }
         }
     }
     let a = &d.ascent;
@@ -746,6 +782,31 @@ mod profile_tests {
         let mut without_basin = d.clone();
         without_basin.headland[2] = 0.;
         assert!((mainland(&d, p, 200.) - mainland(&without_basin, p, 200.)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn composed_aprons_remove_the_observed_lower_foot_step_barriers() {
+        use hex_world_contracts::WorldHex;
+        let g = super::super::tests::compiler(false);
+        // These exact dry edges stopped the production controller on plain02.
+        // This is a terrain regression; movement still needs the app harness.
+        for [a, b] in [
+            [[185, -60], [186, -60]],
+            [[164, -100], [165, -100]],
+            [[165, -100], [166, -100]],
+        ] {
+            let tops = [a, b].map(|[q, r]| {
+                let (column, liquid) = g.column(WorldHex::new(q, r));
+                assert!(liquid.is_none(), "observed dry foothill became water");
+                column.runs.iter().map(|r| r.top).max().expect("dry ground")
+            });
+            let [left, right] = tops;
+            assert!(
+                left.abs_diff(right) <= 1,
+                "lower foot {a:?}->{b:?}: {tops:?}"
+            );
+            eprintln!("COMPOSED_FOOT {a:?}->{b:?} {tops:?}");
+        }
     }
 
     #[test]

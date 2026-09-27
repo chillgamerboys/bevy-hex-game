@@ -175,8 +175,10 @@ const BAYS: &[Bay] = &[
         along_x: true,
         frame: "library_lower",
     },
+    // The refitted upper stair leaves the lower hall along local east zero.
+    // Keep this whole bay on the free wall west of that departure ribbon.
     Bay {
-        x: 3.,
+        x: -20.,
         z: 33.,
         along_x: true,
         frame: "library_lower",
