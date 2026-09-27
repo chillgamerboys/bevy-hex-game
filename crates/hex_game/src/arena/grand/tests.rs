@@ -935,6 +935,10 @@ fn process_checkpoint_child() {
 }
 
 #[test]
+#[expect(
+    clippy::expect_used,
+    reason = "The bounded complete companion fixture must hash successfully to compare checkpoint identities."
+)]
 fn companion_streaming_preserves_checkpoint_identity_and_rejects_incomplete_reads() {
     let bytes = vec![37_u8; 40_001];
     let length = u64::try_from(bytes.len()).expect("bounded fixture");
