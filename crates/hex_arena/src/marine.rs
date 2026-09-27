@@ -8,7 +8,7 @@ use hex_core::ocean::{
 };
 use hex_core::{HexCoord, TilePos};
 
-use crate::collision::{CollisionWorld, slide_with_contacts};
+use crate::collision::{slide_with_contacts, CollisionWorld};
 use crate::{Actor, ActorIntent, ArenaSession, STEP};
 
 const OXYGEN: f32 = 90.0;
