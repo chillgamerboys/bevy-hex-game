@@ -26,8 +26,27 @@ with the connected mountain envelope. All Cargo work remains serialized through 
 shared target lock. No new renderer initiative,
 decoration expansion or broad acceptance rerun precedes the next meaningful terrain picture.
 
-Latest actual package remains rejected plain04; plain05 has not been compiled. The durable
-gameplay/save implementation is retained, with final redesigned-world integration still open.
+Latest actual package is `compiled-r02-plain-05`, built from clean `25fc04a` with
+fingerprint `7001206694272818014`. Strict compilation/readback preserves mainland
+6.999775× and Crystal 7.005680×. Nine fresh windowless views show a connected range
+and broader lower-foot bands, but overall visual review fails: upper fronts remain
+heavy walls and Frozen Woods still reads as a shelf. The waterfall approach frame
+hides receiving water behind a foreground buttress, so that composition remains
+unresolved. The separate surface survey and actual controller receipts are retained.
+West crossing/uphill, mixed walking/swimming/walking, and garden/Crystal/Frozen
+controllers pass; lake-foot uphill stalls about 50m into its route. This is a plain
+diagnostic package with zero dressing, not expedition or native-feel acceptance.
+
+The next isolated geography diagnostic lowers authored terrain elevation to 0.70,
+preserving horizontal areas, physical player/architecture clearance and the World
+Tree's existing physical dimensions. It replaces the broad Frozen flattening with a
+rolling mountain saddle and makes natural basin terrain supply lake containment.
+Compressed stair layouts need fewer/wider turns, not relaxed headroom or exterior
+cover mounds. Inland wet-bed material selection also needs correction: actual lake
+samples have identical water height/depth but expose terrestrial moss/snow caps.
+The durable gameplay/save implementation is retained; dressed-world integration,
+combined CI, native feel and measured performance remain open. Weekly usage was 8%
+at this checkpoint; the hard stop remains 50% consumed.
 
 Status: September 26 revision02 approved; production geography transfer in progress
 Wave: `wave/grand-v4`
