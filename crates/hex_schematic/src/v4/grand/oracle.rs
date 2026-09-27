@@ -162,7 +162,11 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_dista
             let radius = radius * f.core_setback / profile.western_radius_multiplier;
             profile.western_relief * smooth(1. - radius).powf(profile.western_power)
         } else {
-            (height - f.apron_relief).max(0.) * clamp(1. - radius).powf(f.core_power)
+            let shape = d.mountain_composition.as_ref().map_or_else(
+                || clamp(1. - radius).powf(f.core_power),
+                |m| rounded_upper_core(radius, f.core_power, m.peak_rounding_radius),
+            );
+            (height - f.apron_relief).max(0.) * shape
         };
         core = core.max(relief);
     }
@@ -172,10 +176,12 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_dista
         let width = a[3] * (1. - t) + b[3] * t;
         let radius = (width * f.radius_multiplier).max(f.minimum_radius);
         apron = apron.max(f.apron_relief * smooth(1. - distance / radius));
-        core = core.max(
-            (crest - f.apron_relief).max(0.)
-                * clamp(1. - distance / (width * f.core_setback)).powf(f.core_power),
+        let radius = distance / (width * f.core_setback);
+        let shape = d.mountain_composition.as_ref().map_or_else(
+            || clamp(1. - radius).powf(f.core_power),
+            |m| rounded_upper_core(radius, f.core_power, m.peak_rounding_radius),
         );
+        core = core.max((crest - f.apron_relief).max(0.) * shape);
     };
     for &[i, j] in &d.ridge_links {
         if let (Some(a), Some(b)) = (d.peaks.get(i), d.peaks.get(j)) {
@@ -223,6 +229,22 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_dista
     finish_terrain(d, [x, z], height)
 }
 
+/// Round the upper body while retaining the established outer radial profile.
+fn rounded_upper_core(radius: f64, power: f64, join: f64) -> f64 {
+    if radius >= join {
+        // The established outer toe keeps both its elevation and gradient.
+        // Only the inner body is rounded; widening the entire influence had
+        // pushed steep new slopes across previously usable lower ground.
+        return clamp(1. - radius).powf(power);
+    }
+    let t = clamp(radius / join);
+    let value = (1. - join).powf(power);
+    let tangent = -power * (1. - join).powf(power - 1.) * join;
+    // Cubic Hermite: horizontal apex at one, exact old value/slope at join.
+    (2. * t.powi(3) - 3. * t.powi(2) + 1.)
+        + (-2. * t.powi(3) + 3. * t.powi(2)) * value
+        + (t.powi(3) - t.powi(2)) * tangent
+}
 /// Join the broad foot and upper body without spending the shore slope budget
 /// once for each overlapping landform. The bounded blend is continuous and
 /// vanishes where either component vanishes; its width is capped near the coast.
@@ -257,17 +279,39 @@ fn finish_terrain_profiled(
     ) * 0.8;
     let low = d.valley_bowl.level + 3. * (x * 0.009).sin() * (z * 0.012).cos();
     h = h * (1. - blend) + low * blend;
-    // These are the approved broad shoulders, not the open Crystal well floor.
-    for &[cx, cz, level, rx, rz] in &d.site_blends {
-        let rr = ellipse([x, z], [cx, cz], [rx, rz]);
-        let blend = clamp((1.4 - rr) / 0.6);
-        h = h * (1. - blend) + (level + 1.5 * noise(x, z)) * blend;
+    // Preserve the original coast reference, but do not force production
+    // highlands through the coarse model's two constant-height terraces.
+    if !profiles || d.mountain_composition.is_none() {
+        for &[cx, cz, level, rx, rz] in &d.site_blends {
+            let rr = ellipse([x, z], [cx, cz], [rx, rz]);
+            let blend = clamp((1.4 - rr) / 0.6);
+            h = h * (1. - blend) + (level + 1.5 * noise(x, z)) * blend;
+        }
     }
     // The whole ascent includes its enclosing rock. This source-owned envelope
     // blends into the mountain shoulder; the smaller well is carved below.
     let ascent = &d.ascent;
     let distance = crystal_distance(d, [x, z]);
-    if distance >= ascent.well_apothem && distance < ascent.outer_apothem {
+    if let Some(m) = d.mountain_composition.as_ref().filter(|_| profiles) {
+        let angle = (z - ascent.center[1]).atan2(x - ascent.center[0]);
+        let variation =
+            clamp(0.5 + 0.3 * (2. * angle + m.phase).sin() + 0.2 * (3. * angle - 0.8).cos());
+        let width = m.crystal_flank_width[0]
+            + (m.crystal_flank_width[1] - m.crystal_flank_width[0]) * variation;
+        let crest = m.crystal_rim_height[0]
+            + (m.crystal_rim_height[1] - m.crystal_rim_height[0]) * (1. - variation);
+        if distance >= ascent.well_apothem {
+            let inward = clamp(1. - (distance - ascent.well_apothem) / width);
+            let shoulder = if inward <= m.crystal_toe_fraction {
+                h + m.crystal_toe_rise * smooth(inward / m.crystal_toe_fraction)
+            } else {
+                let weight =
+                    smooth((inward - m.crystal_toe_fraction) / (1. - m.crystal_toe_fraction));
+                (h + m.crystal_toe_rise) * (1. - weight) + crest * weight
+            };
+            h = h.max(shoulder);
+        }
+    } else if distance >= ascent.well_apothem && distance < ascent.outer_apothem {
         let weight = smooth(
             (ascent.outer_apothem - distance) / (ascent.outer_apothem - ascent.well_apothem),
         );
@@ -276,7 +320,31 @@ fn finish_terrain_profiled(
     }
     let fr = &d.frozen_route;
     let (dist, y, _) = route_distance([x, z], &fr.points);
-    let blend = smooth((fr.forest_half_width - dist) / 43.)
+    let grade_weight = if let Some(m) = d.mountain_composition.as_ref().filter(|_| profiles) {
+        let variation =
+            clamp(0.5 + 0.3 * (x * 0.013 + m.phase).sin() + 0.2 * (z * 0.017 - 0.4).cos());
+        let width = m.frozen_support_width[0]
+            + (m.frozen_support_width[1] - m.frozen_support_width[0]) * variation;
+        let roll = m.frozen_undulation
+            * (0.6 * (x * 0.013 + z * 0.007).sin() + 0.4 * (z * 0.021 - x * 0.005).cos())
+            * smooth(dist / (fr.width * 0.5 + m.frozen_verge));
+        let body = y - 2. + roll;
+        // The expanded shoulder must not drag the full highland datum across
+        // the established lower foot. Its broad outer toe rises only slightly;
+        // the high forest body joins inside the existing forest envelope.
+        let shoulder = if dist >= fr.forest_half_width {
+            h + m.frozen_toe_rise * smooth((width - dist) / (width - fr.forest_half_width))
+        } else {
+            let inner = fr.width * 0.5 + m.frozen_verge;
+            let support = smooth((fr.forest_half_width - dist) / (fr.forest_half_width - inner));
+            (h + m.frozen_toe_rise) * (1. - support) + body * support
+        };
+        h = h.max(shoulder);
+        smooth((fr.width * 0.5 + m.frozen_verge - dist) / m.frozen_verge)
+    } else {
+        smooth((fr.forest_half_width - dist) / 43.)
+    };
+    let frozen_grade = grade_weight
         * clamp(
             (irregular(
                 [x, z],
@@ -286,7 +354,9 @@ fn finish_terrain_profiled(
             ) - 0.98)
                 / 0.13,
         );
-    h = h * (1. - blend) + (y - 2.) * blend;
+    if !profiles || d.mountain_composition.is_none() {
+        h = h * (1. - frozen_grade) + (y - 2.) * frozen_grade;
+    }
     let landing = &d.frozen_landing;
     let sr = ellipse([x, z], landing.center, landing.radii);
     let blend = smooth((1.5 - sr) / 0.5);
@@ -306,6 +376,13 @@ fn finish_terrain_profiled(
     }
     if profiles {
         h = lake_shore(d, [x, z], h);
+        if d.mountain_composition.is_some() {
+            // Grade the ordinary forest path after its arrival-shore blend,
+            // using the same datum as the published open treads. Otherwise
+            // the old low shore pad leaves a raised causeway at the join.
+            // The existing lake fade keeps the basin footprint unchanged.
+            h = h * (1. - frozen_grade) + y * frozen_grade;
+        }
     }
     let gr = ellipse([x, z], d.garden.center, d.garden.radii);
     if gr < 1. {
@@ -442,7 +519,8 @@ fn finish_terrain_profiled(
     if hr < a.well_apothem {
         h = a.base;
     }
-    if dist < fr.width * 0.5 + 13.
+    if (!profiles || d.mountain_composition.is_none())
+        && dist < fr.width * 0.5 + 13.
         && z > a.center[1] + 85.
         && z < a.center[1] + 160.
         && x < a.center[0] + 40.
@@ -615,6 +693,216 @@ mod profile_tests {
             "../../../../../assets/config/v4/grand-v4/geography-r02.json"
         ))
         .expect("canonical geography")
+    }
+
+    #[test]
+    fn rounded_peak_keeps_the_outer_foot_and_matches_its_slope() {
+        let d = document();
+        let join = d
+            .mountain_composition
+            .as_ref()
+            .expect("mountain profile")
+            .peak_rounding_radius;
+        let power = d.foothills.core_power;
+        let epsilon = 1e-6;
+        let expected_slope = -power * (1. - join).powf(power - 1.);
+        let left_slope = (rounded_upper_core(join, power, join)
+            - rounded_upper_core(join - epsilon, power, join))
+            / epsilon;
+        assert!(
+            (left_slope - expected_slope).abs() < 0.0001,
+            "the upper body must not introduce a slope kink at its toe"
+        );
+        for i in 0_u16..=100 {
+            let radius = join + (1. - join) * f64::from(i) / 100.;
+            assert_eq!(
+                rounded_upper_core(radius, power, join).to_bits(),
+                clamp(1. - radius).powf(power).to_bits()
+            );
+        }
+        assert!(
+            (rounded_upper_core(epsilon, power, join) - 1.).abs() < epsilon * epsilon * 20.,
+            "the summit must have a horizontal tangent"
+        );
+    }
+
+    #[test]
+    fn frozen_woods_treads_meet_their_graded_surroundings() {
+        let g = super::super::tests::compiler(false);
+        let d = g.geography.document.as_ref().expect("geography");
+        let route = g
+            .layered
+            .routes
+            .iter()
+            .find(|r| r.id == "frozen_shore")
+            .expect("Frozen Woods route");
+        let mut checked = 0;
+        for p in &route.supports {
+            let point = g.geography.model_xz(p.column);
+            // The explicit Crystal exit crosses the well opening; this check
+            // concerns the ordinary forest ground beyond that intended span.
+            if crystal_distance(d, point) < d.ascent.well_apothem {
+                continue;
+            }
+            let top = g.surface(p.column).level + 1;
+            assert!(
+                top.abs_diff(p.level + 1) <= 1,
+                "Frozen tread at {p:?} is raised above its graded ground {top}"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "the forest crossing must be sampled");
+    }
+
+    #[test]
+    #[ignore = "explicit exact-column neighborhood survey; reports geometry, not acceptance"]
+    fn report_mountain_foot_neighborhoods() {
+        use super::super::{GrandCompiler, GrandSpec};
+        use hex_world_contracts::WorldHex;
+        let after = super::super::tests::compiler(false);
+        let mut baseline = document();
+        baseline.mountain_composition = None;
+        let mut source: GrandSpec = ron::from_str(include_str!(
+            "../../../../../assets/config/v4/grand-v4/world.ron"
+        ))
+        .expect("canonical world");
+        source.full_dressing = false;
+        let bytes = serde_json::to_vec(&baseline).expect("baseline identity");
+        let before =
+            GrandCompiler::with_geography(source, baseline, &bytes).expect("baseline terrain");
+        for (name, center) in [
+            ("north-lake", [350., 939.]),
+            ("east-lake-foot", [612., 445.]),
+            ("east-crystal-foot", [31., 550.]),
+        ] {
+            let corners = [
+                [center[0] - 80., center[1] - 80.],
+                [center[0] + 80., center[1] - 80.],
+                [center[0] - 80., center[1] + 80.],
+                [center[0] + 80., center[1] + 80.],
+            ]
+            .map(|p| after.geography.world_hex(p));
+            let min_q = corners.iter().map(|p| p.q).min().expect("corners") - 2;
+            let max_q = corners.iter().map(|p| p.q).max().expect("corners") + 2;
+            let min_r = corners.iter().map(|p| p.r).min().expect("corners") - 2;
+            let max_r = corners.iter().map(|p| p.r).max().expect("corners") + 2;
+            let mut rows = Vec::new();
+            for q in min_q..=max_q {
+                for r in min_r..=max_r {
+                    let p = WorldHex::new(q, r);
+                    let model = after.geography.model_xz(p);
+                    if (model[0] - center[0]).abs() > 80. || (model[1] - center[1]).abs() > 80. {
+                        continue;
+                    }
+                    let a = before.column(p);
+                    let b = after.column(p);
+                    let top = |c: &hex_world_contracts::ColumnData| {
+                        c.runs
+                            .iter()
+                            .filter(|r| r.material != "water")
+                            .map(|r| r.top)
+                            .max()
+                            .expect("finite solid column")
+                    };
+                    rows.push(serde_json::json!([
+                        q,
+                        r,
+                        model[0],
+                        model[1],
+                        top(&a.0),
+                        top(&b.0),
+                        a.1.is_some(),
+                        b.1.is_some()
+                    ]));
+                }
+            }
+            eprintln!(
+                "MOUNTAIN_FOOT {}",
+                serde_json::json!({"id":name,"center":center,"radius_model":80,
+                "columns":["q","r","model_east","model_north","baseline_solid_top","candidate_solid_top","baseline_wet","candidate_wet"],"rows":rows})
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "explicit exact-source shape study; emits sections, not a traversal verdict"]
+    fn report_mountain_composition_sections() {
+        use super::super::{grid_value, GrandCompiler, GrandSpec};
+        let candidate = document();
+        assert!(candidate.mountain_composition.is_some());
+        let mut baseline = candidate.clone();
+        baseline.mountain_composition = None;
+        let mut source: GrandSpec = ron::from_str(include_str!(
+            "../../../../../assets/config/v4/grand-v4/world.ron"
+        ))
+        .expect("canonical world");
+        source.full_dressing = false;
+        let bytes = serde_json::to_vec(&baseline).expect("baseline source identity");
+        let g = GrandCompiler::with_geography(source, baseline.clone(), &bytes)
+            .expect("unchanged pre-composition world");
+        for (id, from, to) in [
+            ("crystal-south-north", [-170., 230.], [-170., 850.]),
+            ("crystal-west-east", [-560., 550.], [150., 550.]),
+            ("frozen-cross", [-10., 550.], [-10., 950.]),
+            ("lake-north-body", [350., 650.], [350., 1040.]),
+            ("lake-front-peaks", [20., 445.], [780., 445.]),
+        ] {
+            let mut points = Vec::new();
+            for i in 0_u16..=180 {
+                let t = f64::from(i) / 180.;
+                let point = [
+                    from[0] * (1. - t) + to[0] * t,
+                    from[1] * (1. - t) + to[1] * t,
+                ];
+                let p = g.geography.world_hex(point);
+                let point = g.geography.model_xz(p);
+                let coast = f64::from(grid_value(&g.coast, p, 0)) * 1.5;
+                let before = mainland(&baseline, point, coast);
+                let after = mainland(&candidate, point, coast);
+                let (column, _) = g.column(p);
+                let top = column
+                    .runs
+                    .iter()
+                    .filter(|r| r.material != "water")
+                    .map(|r| r.top)
+                    .max()
+                    .expect("baseline solid ground");
+                points.push([
+                    point[0],
+                    point[1],
+                    before,
+                    after,
+                    f64::from(top - 400) * 0.35,
+                ]);
+            }
+            eprintln!(
+                "MOUNTAIN_SECTION {}",
+                serde_json::json!({
+                    "id":id,"points":points,
+                    "columns":["model_east","model_north","before_surface","candidate_surface","before_final_top"],
+                    "scope":"Exact Rust oracle with actual coast field; candidate precedes layer carving, no traversal proof"
+                })
+            );
+        }
+        let mut grid = Vec::new();
+        for row in 0_i32..=96 {
+            let mut heights = Vec::new();
+            for column in 0_i32..=188 {
+                let point = [-700. + f64::from(column) * 8., 240. + f64::from(row) * 8.];
+                let p = g.geography.world_hex(point);
+                let coast = f64::from(grid_value(&g.coast, p, 0)) * 1.5;
+                heights.push(mainland(&candidate, g.geography.model_xz(p), coast));
+            }
+            grid.push(heights);
+        }
+        eprintln!(
+            "MOUNTAIN_GRID {}",
+            serde_json::json!({
+                "origin":[-700.,240.],"spacing":8.,"heights":grid,
+                "horizontal_scale":candidate.transform.horizontal_scale,"vertical_scale":1.,
+                "scope":"Exact-source surface study, 8model sampling; not game render or final layered columns"
+            })
+        );
     }
 
     #[test]

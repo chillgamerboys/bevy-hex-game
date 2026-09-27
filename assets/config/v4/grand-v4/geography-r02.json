@@ -2961,5 +2961,26 @@
     "bank_blend": 8,
     "wet_fan_radius": 24,
     "wet_edge_depth": 0.35
+  },
+  "mountain_composition": {
+    "crystal_flank_width": [
+      120.0,
+      180.0
+    ],
+    "crystal_rim_height": [
+      208.0,
+      236.0
+    ],
+    "frozen_support_width": [
+      120.0,
+      170.0
+    ],
+    "frozen_verge": 8.0,
+    "frozen_undulation": 8.0,
+    "phase": 0.7,
+    "peak_rounding_radius": 0.55,
+    "crystal_toe_fraction": 0.5,
+    "crystal_toe_rise": 8,
+    "frozen_toe_rise": 2
   }
 }
