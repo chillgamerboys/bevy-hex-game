@@ -17,6 +17,7 @@ pub struct GrandGeographyDocument {
     pub calibration: String,
     pub(super) transform: GeographyTransform,
     pub(super) coast: Coast,
+    pub(super) foothills: Foothills,
     pub(super) massif: [f64; 5],
     pub(super) headland: [f64; 5],
     pub(super) peaks: Vec<[f64; 5]>,
@@ -65,6 +66,17 @@ macro_rules! shape {
         pub(super) struct $name {$(pub $field:$ty),*}
     };
 }
+shape!(Foothills {
+    radius_multiplier: f64,
+    minimum_radius: f64,
+    apron_relief: f64,
+    base_level: f64,
+    compressed_height: f64,
+    restored_height: f64,
+    compression: f64,
+    toe_blend_height: f64,
+    coast_noise_fade: [f64; 2]
+});
 shape!(Coast {center:[f64;2],radii:[f64;2],phase:f64,coves:Vec<[f64;4]>});
 shape!(Ellipse {
     center: [f64; 2],
@@ -151,7 +163,17 @@ impl GrandGeographyDocument {
                         .is_some_and(|(a, b)| (a[0] - b[0]).hypot(a[2] - b[2]) > 0.01)
                 })
         };
-        if !bounded(self.frames.len(), 1, 128)
+        let f = &self.foothills;
+        if !(1. ..=3.).contains(&f.radius_multiplier)
+            || !(100. ..=1000.).contains(&f.minimum_radius)
+            || !(1. ..=100.).contains(&f.apron_relief)
+            || !(0. ..f.compressed_height).contains(&f.base_level)
+            || !(f.compressed_height + 1. ..=300.).contains(&f.restored_height)
+            || !(0.01..=1.).contains(&f.compression)
+            || !(0.1..=10.).contains(&f.toe_blend_height)
+            || !(0. ..f.coast_noise_fade[1]).contains(&f.coast_noise_fade[0])
+            || !(0.1..=0.8).contains(&f.coast_noise_fade[1])
+            || !bounded(self.frames.len(), 1, 128)
             || !bounded(self.peaks.len(), 1, 32)
             || self.ridge_links.len() > 64
             || self.site_shoulders.len() > 32
@@ -227,7 +249,12 @@ impl GrandGeographyDocument {
                     .chain(&c.target)
                     .chain(&c.interest)
                     .all(|v| v.is_finite() && v.abs() <= 10000.)
-                    || c.eye == c.target
+                    || c.eye
+                        .iter()
+                        .zip(c.target)
+                        .map(|(a, b)| (a - b).powi(2))
+                        .sum::<f64>()
+                        <= f64::EPSILON
                     || c.horizontal_span
                         .is_some_and(|s| !s.is_finite() || !(1. ..=10000.).contains(&s))
                     || (c.ground && c.horizontal_span.is_some())

@@ -415,6 +415,10 @@ impl GrandCompiler {
             water: water.map(|y| self.geography.top_level(y)),
         }
     }
+    #[expect(
+        clippy::expect_used,
+        reason = "Only the admitted r02 compiler calls this path; its finite levels and required document are constructor invariants."
+    )]
     pub(super) fn r02_column(&self, p: WorldHex) -> (ColumnData, Option<LiquidColumn>) {
         let s = self.r02_surface(p);
         let top = s.level + 1;
@@ -527,7 +531,11 @@ mod cave_cover_tests {
             failures.is_empty(),
             "closed cave breaks natural cover: {} columns, first {:?}",
             failures.len(),
-            failures.iter().take(24).map(|(p,r,n)| (g.geography.model_xz(*p), r,n)).collect::<Vec<_>>()
+            failures
+                .iter()
+                .take(24)
+                .map(|(p, r, n)| (g.geography.model_xz(*p), r, n))
+                .collect::<Vec<_>>()
         );
     }
 }

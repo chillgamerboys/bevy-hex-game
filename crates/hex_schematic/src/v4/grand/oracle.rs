@@ -21,6 +21,57 @@ pub(super) fn crystal_distance(d: &GrandGeographyDocument, point: [f64; 2]) -> f
         .max((0.5 * dx + 0.866025403784 * dz).abs())
         .max((0.5 * dx - 0.866025403784 * dz).abs())
 }
+/// Broad source-owned mountain apron. It is shared with surface acceptance;
+/// this mask does not select particular routes or omit awkward joins.
+pub(super) fn foothill_weight(d: &GrandGeographyDocument, point: [f64; 2]) -> f64 {
+    let f = &d.foothills;
+    let mut apron: f64 = 0.;
+    for &[cx, cz, _, rx, rz] in std::iter::once(&d.massif)
+        .chain(std::iter::once(&d.headland))
+        .chain(&d.peaks)
+        .chain(&d.site_shoulders)
+    {
+        let r = ellipse(
+            point,
+            [cx, cz],
+            [
+                (rx * f.radius_multiplier).max(f.minimum_radius),
+                (rz * f.radius_multiplier).max(f.minimum_radius),
+            ],
+        );
+        apron = apron.max(f.apron_relief * smooth(1. - r));
+    }
+    for path in &d.landform_ridges {
+        for pair in path.windows(2) {
+            let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
+                continue;
+            };
+            let (distance, t) = segment(point, [a[0], a[1]], [b[0], b[1]]);
+            let radius = ((a[3] * (1. - t) + b[3] * t) * f.radius_multiplier).max(f.minimum_radius);
+            apron = apron.max(f.apron_relief * smooth(1. - distance / radius));
+        }
+    }
+    smooth(apron / (f.apron_relief * 0.35))
+}
+/// Complete broad base envelope; water and cave overlaps are reported separately
+/// by final-column surveys rather than removed from this authoring region.
+pub(super) fn foothill_region(d: &GrandGeographyDocument, point: [f64; 2]) -> bool {
+    foothill_weight(d, point) > 0.01
+}
+fn foothill_height(d: &GrandGeographyDocument, point: [f64; 2], h: f64) -> f64 {
+    let f = &d.foothills;
+    if h <= f.base_level || h >= f.restored_height || !foothill_region(d, point) {
+        return h;
+    }
+    let delta = h - f.base_level;
+    // The exponential toe keeps both value and first derivative continuous.
+    let lower = f.base_level
+        + delta * f.compression
+        + (1. - f.compression) * f.toe_blend_height * (1. - (-delta / f.toe_blend_height).exp());
+    let restore = smooth((h - f.compressed_height) / (f.restored_height - f.compressed_height));
+    let target = lower + (h - lower) * restore;
+    h + (target - h) * foothill_weight(d, point)
+}
 /// Signed continuous mainland relief; positive land is measured before carving.
 pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
     let co = &d.coast;
@@ -30,7 +81,11 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
         + 0.055 * (5. * a + co.phase).sin()
         + 0.035 * (9. * a + 0.3).cos()
         + 0.025 * (13. * a).sin();
-    let mut h = 42. * (shore - r) + 2.6 * noise(x, z);
+    // Angular coastline detail belongs near the shore. Carrying it to r=0
+    // produces a finite directional jump and a radial fan in the valley.
+    let fade = d.foothills.coast_noise_fade;
+    let coastal_shore = 1. + (shore - 1.) * smooth((r - fade[0]) / (fade[1] - fade[0]));
+    let mut h = 42. * (coastal_shore - r) + 2.6 * noise(x, z);
     for &[cx, cz, rx, rz] in &co.coves {
         h -= 35. * (-2. * ellipse([x, z], [cx, cz], [rx, rz]).powi(2)).exp();
     }
@@ -85,27 +140,6 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
     ) * 0.8;
     let low = d.valley_bowl.level + 3. * (x * 0.009).sin() * (z * 0.012).cos();
     h = h * (1. - blend) + low * blend;
-    for lake in [&d.upper_lake, &d.lower_lake] {
-        let r = irregular([x, z], lake.center, lake.radii, lake.phase);
-        if r < 1.24 {
-            let t = smooth((r - 0.84) / 0.4);
-            let bed = lake.level - 9. + 4. * r * r;
-            h = h * t + bed * (1. - t);
-        }
-    }
-    let gr = ellipse([x, z], d.garden.center, d.garden.radii);
-    if gr < 1. {
-        h = h.max(d.upper_lake.level + 5. + 3. * clamp(1. - gr));
-    }
-    for channel in [&d.falls, &d.river] {
-        let (dist, target, _) = route_distance([x, z], &channel.points);
-        let bank = channel.width * 0.5 + 20.;
-        if dist < bank {
-            let t = smooth((dist - channel.width * 0.40) / (bank - channel.width * 0.40));
-            let cut = target - 3. + 2. * t;
-            h = h.min(h * t + cut * (1. - t));
-        }
-    }
     // These are the approved broad shoulders, not the open Crystal well floor.
     for &[cx, cz, level, rx, rz] in &d.site_blends {
         let rr = ellipse([x, z], [cx, cz], [rx, rz]);
@@ -140,6 +174,40 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
     let sr = ellipse([x, z], landing.center, landing.radii);
     let blend = smooth((1.5 - sr) / 0.5);
     h = h * (1. - blend) + landing.height * blend;
+    // Apply the broad lower profile after all authored shoulder joins. The
+    // positive low coast and elevations above the restoration datum are exact.
+    h = foothill_height(d, [x, z], h);
+    for lake in [&d.upper_lake, &d.lower_lake] {
+        let r = irregular([x, z], lake.center, lake.radii, lake.phase);
+        if r < 1. {
+            // Shallow wet shelf reaches the actual bank. The dry collar above
+            // the water datum encloses every production-resolution shoreline.
+            let edge = smooth((r - 0.82) / 0.18);
+            h = lake.level - 7. + 6. * edge;
+        } else if r < 1.4 {
+            let bank = lake.level + 1.;
+            let blend = smooth((1.4 - r) / 0.3);
+            h = h.max(bank * blend + h * (1. - blend));
+        }
+    }
+    let gr = ellipse([x, z], d.garden.center, d.garden.radii);
+    if gr < 1. {
+        h = h.max(d.upper_lake.level + 5. + 3. * clamp(1. - gr));
+    }
+    for channel in [&d.falls, &d.river] {
+        let (dist, target, _) = route_distance([x, z], &channel.points);
+        let half = channel.width * 0.5;
+        let bank = half + 20.;
+        if dist < half {
+            // A channel has an authored supported bed even where the previous
+            // lowland was lower than it. Merely taking min leaves deep gaps.
+            h = target - 3.;
+        } else if dist < bank {
+            let blend = smooth((bank - dist) / 20.);
+            let retained_bank = target + 1.;
+            h = h * (1. - blend) + retained_bank * blend;
+        }
+    }
     let a = &d.ascent;
     let dx = x - a.center[0];
     let dz = z - a.center[1];
@@ -207,4 +275,82 @@ pub(super) fn water(d: &GrandGeographyDocument, point: [f64; 2], ground: f64) ->
         }
     }
     level
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    fn document() -> GrandGeographyDocument {
+        serde_json::from_str(include_str!(
+            "../../../../../assets/config/v4/grand-v4/geography-r02.json"
+        ))
+        .expect("canonical geography")
+    }
+
+    #[test]
+    fn broad_foothill_curve_preserves_datums_and_has_smooth_joins() {
+        let d = document();
+        let p = [d.massif[0], d.massif[1]];
+        let f = &d.foothills;
+        for height in [-10., 0., f.base_level, f.restored_height, 425.] {
+            assert!((foothill_height(&d, p, height) - height).abs() < 1e-9);
+        }
+        for height in [f.base_level, f.compressed_height, f.restored_height] {
+            let step = 0.0001;
+            let center = foothill_height(&d, p, height);
+            let left = (center - foothill_height(&d, p, height - step)) / step;
+            let right = (foothill_height(&d, p, height + step) - center) / step;
+            assert!(
+                (left - right).abs() < 0.001,
+                "slope join at {height}: {left}/{right}"
+            );
+        }
+        let mut previous = foothill_height(&d, p, 0.);
+        for level in 1..=500_u16 {
+            let current = foothill_height(&d, p, f64::from(level));
+            assert!(current > previous, "height transfer folds at {level}");
+            previous = current;
+        }
+        assert!(foothill_height(&d, p, f.compressed_height) < f.apron_relief);
+    }
+
+    #[test]
+    fn coast_center_has_no_angular_height_discontinuity() {
+        let d = document();
+        let [x, z] = d.coast.center;
+        let center = mainland(&d, [x, z]);
+        for direction in 0..32_u16 {
+            let angle = f64::from(direction) * std::f64::consts::TAU / 32.;
+            let height = mainland(&d, [x + angle.cos() * 0.001, z + angle.sin() * 0.001]);
+            assert!(
+                (height - center).abs() < 0.01,
+                "directional jump: {height} vs {center}"
+            );
+        }
+    }
+
+    #[test]
+    fn main_plunge_has_wet_supported_receiving_neighbors() {
+        let d = document();
+        let t = d.transform;
+        let mut receiving = 0;
+        for [q, r] in [[744, -175], [744, -174], [745, -175], [743, -174]] {
+            let p = hex_world_contracts::WorldHex::new(q, r);
+            let [x, z] = super::super::world_xz(p);
+            let point = [
+                (x - t.translation[0]) / t.horizontal_scale,
+                -(z - t.translation[1]) / t.horizontal_scale,
+            ];
+            let bed = mainland(&d, point);
+            if let Some(level) = water(&d, point, bed) {
+                assert!(bed < level);
+                receiving += 1;
+            }
+        }
+        assert_eq!(
+            receiving, 4,
+            "plunge outlet must not terminate above dry neighbor columns"
+        );
+    }
 }

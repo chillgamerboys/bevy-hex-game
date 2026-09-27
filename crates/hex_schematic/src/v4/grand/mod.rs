@@ -2,7 +2,7 @@
 #![expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    reason = "Finite authored geometry is bounded by radius900 and1600levels; rounding is the voxelization contract."
+    reason = "Finite authored geometry is bounded by radius1052 and2100levels; rounding is the voxelization contract."
 )]
 mod biomes;
 mod dressing;
@@ -268,7 +268,7 @@ impl GrandCompiler {
         if count != source.canonical_mainland_columns * 7 {
             return Err(ContractError::new(
                 "grand",
-                "mainland must be exactly seven times canonical area",
+                format!("mainland must be exactly seven times canonical area: actual {count}, expected {}", source.canonical_mainland_columns * 7),
             ));
         }
         let mut queue = VecDeque::new();
@@ -622,7 +622,8 @@ impl GrandCompiler {
     /// Sample actual quantized relief and named observation locations.
     #[expect(
         clippy::expect_used,
-        reason = "The fixed compiler palette contains every surface material and make_anchors always publishes party_start; missing either is an authoring invariant failure."
+        clippy::cast_sign_loss,
+        reason = "Positive fixed overview extents produce nonnegative grid dimensions. The fixed compiler palette contains every surface material and make_anchors always publishes party_start; missing either is an authoring invariant failure."
     )]
     pub fn overview(&self) -> NorthernOverview {
         let spacing = 8.;

@@ -2014,8 +2014,8 @@
     }
   },
   "sailing_start": [
-    -789.7974631853709,
-    -215.0972373236312
+    -820.0,
+    -235.0
   ],
   "review_cameras": {
     "grand-overview": {
@@ -2888,5 +2888,19 @@
         625
       ]
     ]
+  },
+  "foothills": {
+    "radius_multiplier": 1.8,
+    "minimum_radius": 600.0,
+    "apron_relief": 70.0,
+    "base_level": 55.0,
+    "compressed_height": 120.0,
+    "restored_height": 190.0,
+    "compression": 0.08,
+    "coast_noise_fade": [
+      0.2,
+      0.6
+    ],
+    "toe_blend_height": 3.0
   }
 }
