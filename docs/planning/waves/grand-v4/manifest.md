@@ -427,3 +427,30 @@ production wind and unupgraded input. The 800-unit geometric shore separation is
 not a claim that a bay departure takes 45 seconds; record both actual timings.
 The western start must have ordinary shore access. Sailing results remain pending
 until the new immutable package exists.
+
+### Revision02 first game transfer and foothill correction
+
+The seven actual game views from `4ad2b82d` / `compiled-r02-plain-01` are preserved
+as a failed plain-terrain diagnostic. The user rejected the steep mountain bases.
+Cave-cover inflation, pre-carve overview tops and inland angular-noise artifacts
+are repaired in source. A first elevation-compression approach still creates a
+steep inner belt; it is being replaced by a spatial mountain-base study. Keep the
+hidden lake enclosure, connected complex and Crystal–Frozen shore relationship.
+Do not equate source-model views or isolated route passes with broad traversal.
+
+At `718ff10`, independent and Rust measurements agree on 653,282 mainland columns
+with uniform horizontal scale 0.883566890744603. Crystal's actual outer feature
+contains 22,201 columns (7.00568 times 3,169), replacing the old unused reservation
+count. These source measurements must be repeated if the spatial terrain changes
+the coast. The sampled shore gap is approximately 783.812 units; no new controller
+sailing result exists. No island repositioning is implied by this measurement.
+
+Physical channel drainage is now a finite reverse graph over actual wet neighbors
+leading to receiving lake or ocean water. It is separate from the travelling wave
+highlight chart. The composed constructor passes after moving the lower library
+away from a plunge pool, while current bank/intake regressions are under repair.
+Current rendering work compares bounded stepped Grand distant terrain against the
+immutable first package; that renderer-only comparison cannot accept new geography.
+The next actual map screenshots require a fresh combined package. Full dressed
+presentation, ordinary traversal, restarted saves, residency, combined CI and native
+feel/performance remain open; historical package04 results do not clear them.

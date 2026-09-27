@@ -94,3 +94,19 @@ landmark relationships but fails visual transfer: cave cover distorts the massif
 water-adjacent exact terrain differs sharply from the smooth distant proxy, and
 the fall camera cannot show the complete plunge. These are diagnostic renders,
 not an accepted terrain or completed presentation checkpoint.
+
+The first repair compressed lower elevations and restored the upper profile. A
+whole-footprint source survey found that it merely moved the steep band inward:
+only 14.85% of neighboring edges in the 65–70-unit band met the ordinary one-level
+step limit, and the seaward feet still contained broad steep belts. That repair is
+not accepted. The next study reshapes the mountain bases spatially, with broad
+lower slopes, setback upper faces and varied coastal headlands. Its source views
+omit layered caves, stairs, objects and the controller; they guide implementation
+and cannot stand in for rebuilt game screenshots or ordinary walking.
+
+The upper lake remains at 205 units above sea level and must remain screened by
+the connected mountain complex. Original individual summit heights are adjustable
+within the user's requested shape correction. Any lowered summit requires the Air
+shrine and library to fit the actual new rock cover, without rebuilding an exterior
+wall to preserve an old endpoint. Review the broad foothill belt and mountain joins
+before another full package, then verify the real composed columns and movement.
