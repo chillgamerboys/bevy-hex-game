@@ -153,6 +153,22 @@ fn authored_regions(g: &GrandGeography) -> Vec<BiomeRegion> {
         [x, f64::from(g.top_level(y)) * LEVEL_HEIGHT, z]
     };
     let mut regions = Vec::new();
+    // The open well owns the space above its floor. A tunnel's nominal height
+    // envelope can overlap that space as it approaches from underneath, but
+    // must not rename the Earth temple or the bottom of Crystal Ascent.
+    // Stop at the upper landing so the Frozen Woods arrival keeps its label.
+    let [x, z] = d.ascent.center;
+    regions.push(BiomeRegion {
+        label: Label::Crystal,
+        shape: RegionShape::Hex {
+            center: point([x, d.ascent.base, z]),
+            apothem: g.length(d.ascent.well_apothem),
+        },
+        height: Some([
+            0.,
+            f64::from(g.top_level(d.ascent.top) - g.top_level(d.ascent.base)) * LEVEL_HEIGHT,
+        ]),
+    });
     let label = |layer| match layer {
         SupportLayer::LibraryLower | SupportLayer::LibraryUpper => Label::Library,
         SupportLayer::RootTemple => Label::RootTemple,
@@ -591,6 +607,13 @@ mod tests {
         assert_eq!(
             map.label_at(position(&g, [x, d.ascent.base, z])),
             Some("Crystal Ascent")
+        );
+        let (distance, tunnel_floor, _) = geography::route_distance([x, z], &d.shadow_route);
+        assert!(distance < 8. && tunnel_floor < d.ascent.base);
+        assert_eq!(
+            map.label_at(position(&g, [x, tunnel_floor, z])),
+            Some("Shadow Tunnel"),
+            "the approach below the well keeps its underground label"
         );
         let annulus = (d.ascent.well_apothem + d.ascent.outer_apothem) * 0.5;
         assert_eq!(
