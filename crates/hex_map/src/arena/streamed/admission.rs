@@ -86,6 +86,7 @@ pub(super) fn validate_overview(
         return Err("Streamed ocean lies outside the finite height bounds".into());
     }
     validate_cameras(overview, &bounds)?;
+    super::grand_water::validate(overview)?;
     if let Some(forest) = &overview.forest {
         if manifest.world_id != "grand-v4" {
             return Err("Forest companion is only supported for Grand".into());

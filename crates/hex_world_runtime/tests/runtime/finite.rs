@@ -406,3 +406,46 @@ fn streamed_session_accepts_partial_residency_and_preserves_liquid() {
     assert!(session.apply_transaction(&tx).is_err());
     assert_eq!(session.terrain_at(at), Some("water"));
 }
+
+#[test]
+fn finite_column_edit_query_has_half_open_bounds_and_retains_refill_provenance() {
+    let mut runtime = finite_fixture();
+    let mut session = FiniteWorldSession::streamed(&runtime, -4, 100).unwrap();
+    let at = voxel(point(0, 0), 1);
+    session
+        .apply_transaction(&edit("query-carve", at, 0, None))
+        .unwrap();
+    session
+        .apply_transaction(&edit("query-refill", at, 1, Some("stone")))
+        .unwrap();
+    let check = |session: &FiniteWorldSession| {
+        assert!(session.terrain_edited_in_column(at.column, 1, 2));
+        assert!(session.terrain_edited_in_column(at.column, i32::MIN, i32::MAX));
+        assert!(!session.terrain_edited_in_column(at.column, 0, 1));
+        assert!(!session.terrain_edited_in_column(at.column, 2, 3));
+        assert!(!session.terrain_edited_in_column(at.column, 1, 1));
+        assert!(!session.terrain_edited_in_column(at.column, 2, 1));
+        assert!(!session.terrain_edited_in_column(point(0, 1), 1, 2));
+    };
+    check(&session);
+    let header = session.checkpoint_header();
+    let partitions = session
+        .checkpoint_partitions()
+        .collect::<RuntimeResult<Vec<_>>>()
+        .unwrap();
+    runtime.set_interests(vec![]).unwrap();
+    runtime.pump();
+    session.sync_residency(&runtime);
+    check(&session);
+    let restored = FiniteWorldSession::restore_checkpoint(
+        &runtime,
+        -4,
+        100,
+        &header,
+        partitions.into_iter().map(Ok),
+        &CancellationToken::default(),
+    )
+    .unwrap();
+    check(&restored);
+    assert_eq!(restored.resident_source_count(), 0);
+}

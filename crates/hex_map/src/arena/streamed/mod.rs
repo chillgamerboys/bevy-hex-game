@@ -31,7 +31,9 @@ mod burrow;
 pub mod checkpoint;
 mod grand_forest;
 mod grand_ground_cover;
+mod grand_inland_terrain;
 mod grand_landmarks;
+mod grand_water;
 mod render;
 #[cfg(test)]
 mod tests;

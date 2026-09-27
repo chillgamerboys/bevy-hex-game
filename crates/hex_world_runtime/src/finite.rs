@@ -255,6 +255,24 @@ impl FiniteWorldSession {
         self.terrain_edits.contains_key(&at)
     }
 
+    /// Whether any explicit terrain edit intersects a column's half-open level
+    /// interval. Sparse provenance remains available after eviction and restore;
+    /// this query never reads or pins an immutable source chunk.
+    #[must_use]
+    pub fn terrain_edited_in_column(&self, column: WorldHex, bottom: i32, top: i32) -> bool {
+        bottom < top
+            && self
+                .terrain_edits
+                .range(
+                    VoxelPosition {
+                        column,
+                        level: bottom,
+                    }..VoxelPosition { column, level: top },
+                )
+                .next()
+                .is_some()
+    }
+
     /// Current exact material with terrain taking precedence over object overlap.
     #[must_use]
     pub fn material_at(&self, at: VoxelPosition) -> Option<&str> {

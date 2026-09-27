@@ -17,6 +17,7 @@ use std::{
 
 struct Completion {
     epoch: u64,
+    suppressed_terrain: BTreeSet<ChunkId>,
     target: ChunkId,
     revision: Option<u64>,
     authority: BTreeMap<ChunkId, u64>,
@@ -33,6 +34,7 @@ struct Renderer {
     visible_objects: BTreeMap<String, BTreeSet<ChunkId>>,
     publication_revision: u64,
     terrain_edges: BTreeMap<ChunkId, BTreeMap<hex_world_contracts::WorldHex, f32>>,
+    immutable_edges: super::grand_inland_terrain::Edges,
     proxies: BTreeMap<ChunkId, (Entity, Handle<Mesh>)>,
     hidden_proxies: BTreeSet<ChunkId>,
     materials: Vec<Handle<StandardMaterial>>,
@@ -66,6 +68,7 @@ pub(super) fn clear(world: &mut World) {
     super::grand_landmarks::clear(world);
     super::grand_forest::clear(world);
     super::grand_ground_cover::clear(world);
+    super::grand_water::clear(world);
     if let Some(mut render) = world.remove_resource::<Renderer>() {
         render.presenter.clear(world);
         for (_, (entity, mesh)) in render.proxies {
@@ -282,6 +285,13 @@ fn draw(world: &mut World) {
             });
             candidates.truncate(256);
             let desired: BTreeSet<_> = candidates.iter().copied().collect();
+            let previous_details = renderer
+                .presenter
+                .receipts()
+                .map(|r| r.coordinate)
+                .collect();
+            super::grand_water::sync(world, &state, &previous_details);
+            let suppressed = super::grand_water::suppressed_terrain(world);
             let completion = renderer
                 .receiver
                 .lock()
@@ -290,6 +300,7 @@ fn draw(world: &mut World) {
             if let Some(completion) = completion {
                 renderer.active = false;
                 if completion.epoch == renderer.epoch
+                    && completion.suppressed_terrain == suppressed
                     && completion.revision.map_or_else(
                         || !desired.contains(&completion.target),
                         |revision| {
@@ -380,19 +391,21 @@ fn draw(world: &mut World) {
                 .map(|receipt| receipt.coordinate)
                 .collect();
             super::grand_ground_cover::sync(world, &state, &renderer.accepted, &detailed, center);
-            for chunk in renderer.hidden_proxies.symmetric_difference(&detailed) {
+            super::grand_water::set_detailed(world, &detailed);
+            let hidden: BTreeSet<_> = detailed.union(&suppressed).copied().collect();
+            for chunk in renderer.hidden_proxies.symmetric_difference(&hidden) {
                 let Some((entity, _)) = renderer.proxies.get(chunk) else {
                     continue;
                 };
                 if let Some(mut v) = world.get_mut::<Visibility>(*entity) {
-                    *v = if detailed.contains(chunk) {
+                    *v = if hidden.contains(chunk) {
                         Visibility::Hidden
                     } else {
                         Visibility::Inherited
                     };
                 }
             }
-            renderer.hidden_proxies = detailed;
+            renderer.hidden_proxies = hidden;
             let retired = renderer
                 .presenter
                 .receipts()
@@ -559,6 +572,9 @@ fn draw(world: &mut World) {
                 })
                 .filter(|c| renderer.proxies.contains_key(c))
                 .collect();
+            let mut proxy_edges = renderer.immutable_edges.clone();
+            proxy_edges.retain(|chunk, _| !suppressed.contains(chunk));
+            proxy_edges.extend(next_edges);
             let overview = state.overview.clone();
             let context = renderer.presenter.preparer();
             let sender = renderer.sender.clone();
@@ -587,9 +603,10 @@ fn draw(world: &mut World) {
                                 .map_err(|e| e.to_string())
                         })
                         .collect();
-                    let proxies = proxy_updates(&overview, &next_edges, &changed_proxies);
+                    let proxies = proxy_updates(&overview, &proxy_edges, &changed_proxies);
                     let _sent = sender.send(Completion {
                         epoch,
+                        suppressed_terrain: suppressed,
                         target,
                         revision,
                         authority,
@@ -638,10 +655,12 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
             reflectance: 0.05,
             ..default()
         });
+    let immutable_edges = super::grand_inland_terrain::edges(&state.overview);
     let mut proxies = BTreeMap::new();
     for descriptor in &state.runtime.manifest().chunks {
         let c = descriptor.coordinate;
-        if let Some(mesh) = proxy(&state.overview, c) {
+        let edges = nearby_transition_edges(c, &immutable_edges);
+        if let Some(mesh) = proxy_with_edges(&state.overview, c, &edges) {
             let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
             let entity = world
                 .spawn((
@@ -661,6 +680,7 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
         visible_objects: BTreeMap::new(),
         publication_revision: 0,
         terrain_edges: BTreeMap::new(),
+        immutable_edges,
         proxies,
         hidden_proxies: BTreeSet::new(),
         materials: vec![material],
@@ -947,7 +967,11 @@ fn transition_height(base: f32, point: Vec2, edges: &[EdgeTransition]) -> f32 {
 fn axial_xz(q: f32, r: f32) -> Vec2 {
     Vec2::new(3.0_f32.sqrt() * (q + r * 0.5), r * 1.5)
 }
-fn proxy(map: &hex_schematic::v4::northern::NorthernOverview, c: ChunkId) -> Option<Mesh> {
+#[cfg(test)]
+pub(super) fn proxy(
+    map: &hex_schematic::v4::northern::NorthernOverview,
+    c: ChunkId,
+) -> Option<Mesh> {
     proxy_with_edges(map, c, &[])
 }
 #[expect(
@@ -959,6 +983,9 @@ fn proxy_with_edges(
     c: ChunkId,
     edges: &[EdgeTransition],
 ) -> Option<Mesh> {
+    if let Some(chunk) = super::grand_inland_terrain::chunk(map, c) {
+        return Some(super::grand_inland_terrain::mesh(map, chunk));
+    }
     let topology = proxy_topology();
     let mut positions = Vec::with_capacity(topology.positions.len() + edges.len() * 4);
     let mut normals = Vec::with_capacity(positions.capacity());

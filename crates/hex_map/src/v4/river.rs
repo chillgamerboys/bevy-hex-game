@@ -8,7 +8,7 @@ use bevy::{
 use hex_world_contracts::{ChunkPackage, LiquidKind, VoxelRun, WorldHex};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum Style {
+pub(crate) enum Style {
     Current,
     Rapid,
     Fall,
@@ -21,17 +21,24 @@ pub(super) fn style(package: &ChunkPackage, position: WorldHex, run: &VoxelRun) 
     let liquid = package.semantics.liquids.iter().find(|liquid| {
         liquid.column == position && liquid.bottom == run.bottom && liquid.top == run.top
     })?;
-    let downstream = liquid.downstream.first()?;
-    match liquid.kind {
+    liquid_style(liquid.kind, liquid.top, liquid.downstream.first().copied())
+}
+
+/// One style selection for exact detailed and distant authored liquid faces.
+pub(crate) fn liquid_style(
+    kind: LiquidKind,
+    top: i32,
+    downstream: Option<hex_world_contracts::VoxelPosition>,
+) -> Option<Style> {
+    let downstream = downstream?;
+    match kind {
         LiquidKind::Standing => None,
         LiquidKind::Waterfall => Some(Style::Fall),
-        LiquidKind::Directed => Some(
-            if i64::from(liquid.top) - 1 - i64::from(downstream.level) >= 2 {
-                Style::Rapid
-            } else {
-                Style::Current
-            },
-        ),
+        LiquidKind::Directed => Some(if i64::from(top) - 1 - i64::from(downstream.level) >= 2 {
+            Style::Rapid
+        } else {
+            Style::Current
+        }),
     }
 }
 
@@ -43,7 +50,7 @@ struct Parameters {
 }
 
 #[derive(Asset, AsBindGroup, TypePath, Clone)]
-pub(super) struct Extension {
+pub(crate) struct Extension {
     #[uniform(100)]
     parameters: Parameters,
 }
@@ -52,10 +59,10 @@ impl MaterialExtension for Extension {
         "shaders/grand_river.wgsl".into()
     }
 }
-pub(super) type RiverMaterial = ExtendedMaterial<StandardMaterial, Extension>;
+pub(crate) type RiverMaterial = ExtendedMaterial<StandardMaterial, Extension>;
 
 #[derive(Resource, Default)]
-pub(super) struct Enabled;
+pub(crate) struct Enabled;
 
 pub(crate) fn install(app: &mut App) {
     app.add_plugins(MaterialPlugin::<RiverMaterial>::default())
@@ -75,7 +82,7 @@ fn phase(seconds: f64) -> f32 {
     clippy::cast_possible_truncation,
     reason = "Absolute authored coordinates are reduced to one wavelength in f64 before f32 uniforms."
 )]
-pub(super) fn set_origin(
+pub(crate) fn set_origin(
     material: &mut RiverMaterial,
     origin: super::RenderOrigin,
     level_height: f32,
@@ -89,7 +96,7 @@ pub(super) fn set_origin(
     material.extension.parameters.direction.z = (chart / 6.0).rem_euclid(1.0) as f32;
 }
 
-pub(super) fn material(style: Style, color: Color, seconds: f64) -> RiverMaterial {
+pub(crate) fn material(style: Style, color: Color, seconds: f64) -> RiverMaterial {
     let [x, z] = hex_schematic::v4::grand::RIVER_PHASE_DIRECTION;
     RiverMaterial {
         base: StandardMaterial {

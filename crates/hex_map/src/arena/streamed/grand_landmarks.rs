@@ -20,7 +20,9 @@ const MAX_COLUMNS: usize = 20_000;
 const MAX_RUNS: usize = 25_000;
 // Grand package 13408690208396973052 uses 15,883 columns / 19,963 runs and
 // 496,932 indexed vertices (853,182 indices); retain a bounded ~20% margin.
-const MAX_VERTICES: usize = 600_000;
+// Approved revision02 tree measures 711,860 indexed vertices; retain a fixed
+// 750k ceiling while its columns/runs stay within the existing 20k/25k budgets.
+const MAX_VERTICES: usize = 750_000;
 const CORNERS: [Vec3; 6] = [
     Vec3::new(0.0, 0.0, 1.0),
     Vec3::new(0.866_025_4, 0.0, 0.5),
@@ -1041,6 +1043,18 @@ mod tests {
         assert!(out.normals.is_empty());
         assert!(out.colors.is_empty());
         assert!(out.indices.is_empty());
+    }
+
+    #[test]
+    fn indexed_face_budget_accepts_the_boundary_without_growing_the_envelope() {
+        let mut out = Surface {
+            positions: vec![[0.0; 3]; MAX_VERTICES - CORNERS.len()],
+            ..default()
+        };
+        assert!(out.polygon(&CORNERS, [1.0; 4]).is_ok());
+        assert_eq!(out.positions.len(), MAX_VERTICES);
+        assert!(out.polygon(&CORNERS, [1.0; 4]).is_err());
+        assert_eq!(out.positions.len(), MAX_VERTICES);
     }
 
     #[test]
