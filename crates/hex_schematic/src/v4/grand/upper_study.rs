@@ -228,8 +228,10 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
             let p = WorldHex::new(q, r);
             let [east, north] = before.geography.model_xz(p);
             let coast = f64::from(grid_value(&before.coast, p, 0)) * 1.5;
-            let old_surface = oracle::mainland(&baseline, [east, north], coast);
-            let new_surface = oracle::mainland(&candidate, [east, north], coast);
+            let old_surface = oracle::mainland(&baseline, [east, north], coast)
+                * baseline.transform.vertical_scale;
+            let new_surface = oracle::mainland(&candidate, [east, north], coast)
+                * candidate.transform.vertical_scale;
             let (old_column, old_water) = before.column(p);
             let (new_column, new_water) = after.column(p);
             let old_top = solid_top(&old_column);
@@ -291,8 +293,10 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
             points.push([
                 east,
                 north,
-                oracle::mainland(&baseline, [east, north], coast),
-                oracle::mainland(&candidate, [east, north], coast),
+                oracle::mainland(&baseline, [east, north], coast)
+                    * baseline.transform.vertical_scale,
+                oracle::mainland(&candidate, [east, north], coast)
+                    * candidate.transform.vertical_scale,
                 relief(solid_top(&before.column(p).0)),
                 relief(solid_top(&after.column(p).0)),
             ]);
@@ -318,8 +322,12 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
             let p = before.geography.world_hex(point);
             let point = before.geography.model_xz(p);
             let coast = f64::from(grid_value(&before.coast, p, 0)) * 1.5;
-            old_row.push(oracle::mainland(&baseline, point, coast));
-            new_row.push(oracle::mainland(&candidate, point, coast));
+            old_row.push(
+                oracle::mainland(&baseline, point, coast) * baseline.transform.vertical_scale,
+            );
+            new_row.push(
+                oracle::mainland(&candidate, point, coast) * candidate.transform.vertical_scale,
+            );
             water_row.push(after.surface(p).water.map(relief));
         }
         before_grid.push(old_row);
@@ -330,8 +338,10 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
         &output.join("grid.json"),
         &json!({
             "origin":[-820.,-100.],"spacing":6.,"horizontal_scale":candidate.transform.horizontal_scale,
-            "vertical_scale":1.,"baseline":before_grid,"candidate":after_grid,"water":water_grid,
-            "scope":"Exact Rust source sampled on nearest production hex at six-model-unit spacing. No decoration, game renderer or body proof."
+            "vertical_scale":1.,"authoring_vertical_scale":candidate.transform.vertical_scale,
+            "upper_lake_height":candidate.upper_lake.level * candidate.transform.vertical_scale,
+            "baseline":before_grid,"candidate":after_grid,"water":water_grid,
+            "scope":"Physical sea-relative Rust source heights sampled on nearest production hex at six-model-unit spacing. No decoration, game renderer or body proof."
         }),
     )?;
     let mut crest_samples = Vec::new();
@@ -350,8 +360,10 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
                     let p = before.geography.world_hex(point);
                     let point = before.geography.model_xz(p);
                     let coast = f64::from(grid_value(&before.coast, p, 0)) * 1.5;
-                    let old = oracle::mainland(&baseline, point, coast);
-                    let new = oracle::mainland(&candidate, point, coast);
+                    let old = oracle::mainland(&baseline, point, coast)
+                        * baseline.transform.vertical_scale;
+                    let new = oracle::mainland(&candidate, point, coast)
+                        * candidate.transform.vertical_scale;
                     if old > old_max {
                         old_max = old;
                         old_at = point;
@@ -371,6 +383,9 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
         &json!({
             "status":"SOURCE_STUDY_COMPLETE_NOT_GAME_ACCEPTANCE",
             "mode":mode,"baseline_definition":definition,
+            "height_units":"physical world units above sea, without display exaggeration",
+            "baseline_authoring_vertical_scale":baseline.transform.vertical_scale,
+            "candidate_authoring_vertical_scale":candidate.transform.vertical_scale,
             "baseline_source_fingerprint":before.source_fingerprint,"candidate_source_fingerprint":after.source_fingerprint,
             "mainland_columns":count,"changed_top_columns":changed_top,"changed_water_columns":changed_water,
             "changed_wet_beds":changed_wet_beds,"changed_original_near_channel_tops":changed_near_channel,

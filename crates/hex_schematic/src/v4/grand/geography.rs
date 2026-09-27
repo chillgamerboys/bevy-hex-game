@@ -405,6 +405,7 @@ impl GrandGeographyDocument {
                 .landform_ridges
                 .iter()
                 .any(|p| !bounded(p.len(), 2, 64))
+            || !(60. ..=350.).contains(&self.tree.height)
             || self.rooms.len() > 16
             || self.layer_routes.len() > 32
             || self.review_cameras.len() > 64
@@ -659,12 +660,15 @@ impl GrandGeography {
     }
     pub(super) fn tree_dimensions(&self) -> TreeDimensions {
         let s = self.transform().horizontal_scale;
-        let y = self.transform().vertical_scale;
+        // Tree height is an authored physical asset dimension. Terrain relief
+        // scaling must not squash this accepted crown while leaving its width
+        // and all ordinary trees unchanged.
+        let height = self.document.as_ref().map_or(235.451, |d| d.tree.height);
         // Measured outer-lobe union of approved seed712, not the nominal lobe radius.
         TreeDimensions {
             crown_radii: [166.744 * s, 150.877 * s],
             root_reach: 100. * s,
-            height: 235.451 * y,
+            height,
         }
     }
 }

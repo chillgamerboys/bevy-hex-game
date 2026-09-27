@@ -261,9 +261,26 @@ impl Layered {
                     natural_top
                 };
                 let portal = near_terminal && terminal_cover < top + 16;
+                // A physical-height corridor joins the room's existing roof.
+                // Terrain scaling may leave that roof below the corridor's
+                // usual ceiling; do not carve through it into the exterior.
+                let ceiling = self
+                    .columns
+                    .get(&p)
+                    .into_iter()
+                    .flatten()
+                    .filter(|room| {
+                        room.layer == layer
+                            && !room.open
+                            && room.top == top
+                            && room.ceiling >= top + 8
+                    })
+                    .map(|room| room.ceiling)
+                    .min()
+                    .map_or(top + 36, |ceiling| ceiling.min(top + 36));
                 self.columns.entry(p).or_default().push(ClearLayer {
                     top,
-                    ceiling: top + 36,
+                    ceiling,
                     layer,
                     open: open || portal,
                 });
@@ -469,7 +486,15 @@ impl GrandCompiler {
         }
         // The approved natural landform is authoritative. Cave authoring must
         // fit beneath it; cover requirements never change the exterior skyline.
-        let top = self.geography.top_level(h).max(2);
+        let water_top = water.map(|y| self.geography.top_level(y));
+        // An authored wet margin stays at least one physical voxel deep when
+        // relief scaling rounds its surface and bed to the same level.
+        let top = water_top
+            .map_or_else(
+                || self.geography.top_level(h),
+                |water| self.geography.top_level(h).min(water - 1),
+            )
+            .max(2);
         let mut material = if h < 9. {
             "sand"
         } else if water.is_some() {
@@ -499,7 +524,7 @@ impl GrandCompiler {
         GrandSurface {
             level: top - 1,
             material,
-            water: water.map(|y| self.geography.top_level(y)),
+            water: water_top,
         }
     }
     #[expect(

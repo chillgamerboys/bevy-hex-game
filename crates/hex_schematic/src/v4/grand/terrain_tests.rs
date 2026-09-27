@@ -480,7 +480,12 @@ fn source_lake_and_fountain_intake_are_contained_and_connected() {
     assert_eq!(
         reached.len(),
         wet.len(),
-        "source water contains a disconnected pocket"
+        "source water contains disconnected columns: {:?}",
+        wet.iter()
+            .filter(|(p, _)| !reached.contains(p))
+            .map(|(p, water)| (p, g.geography.model_xz(*p), water))
+            .take(8)
+            .collect::<Vec<_>>()
     );
     let lake_top = g.geography.top_level(d.upper_lake.level);
     let mut banks = 0;

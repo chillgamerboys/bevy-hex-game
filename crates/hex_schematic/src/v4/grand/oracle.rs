@@ -455,11 +455,11 @@ fn finish_terrain_profiled(
             (h + m.frozen_toe_rise) * (1. - support) + body * support
         };
         if d.mountain_envelope.is_some() {
-            // The Frozen Woods are a broad pass cut into the shared mountain,
-            // not a thin raised route or a trench through a higher plateau.
+            // The authored saddle supplies the forest floor. Preserve its
+            // cross-slope instead of flattening a broad band to the trail's
+            // altitude; only the immediate path is graded below.
             let forest = smooth((width - dist) / (width - fr.forest_half_width));
-            let rolling_pass = body + 0.18 * (h - body);
-            h = h * (1. - forest) + rolling_pass * forest;
+            h += roll * forest;
         } else {
             h = h.max(shoulder);
         }
@@ -484,14 +484,17 @@ fn finish_terrain_profiled(
     let sr = ellipse([x, z], landing.center, landing.radii);
     let blend = smooth((1.5 - sr) / 0.5);
     h = h * (1. - blend) + landing.height * blend;
-    for lake in [&d.upper_lake, &d.lower_lake] {
+    for (lake, upper) in [(&d.upper_lake, true), (&d.lower_lake, false)] {
         let r = irregular([x, z], lake.center, lake.radii, lake.phase);
         if r < 1. {
             // Shallow wet shelf reaches the actual bank. The dry collar above
             // the water datum encloses every production-resolution shoreline.
             let edge = smooth((r - 0.82) / 0.18);
             h = lake.level - 7. + 6. * edge;
-        } else if r < 1.4 {
+        } else if r < 1.4 && (!upper || d.mountain_envelope.is_none() || !profiles) {
+            // The shared mountain envelope contains the upper basin. Keep
+            // its immediate shore below, without another raised outer bowl.
+            // The established lowland lake keeps its broad gentle margin.
             let bank = lake.level + 1.;
             let blend = smooth((1.4 - r) / 0.3);
             h = h.max(bank * blend + h * (1. - blend));
@@ -520,7 +523,10 @@ fn finish_terrain_profiled(
                 // final ordinary risers; its sides meet the garden soil.
                 let weight =
                     smooth((access.width * 0.5 + access.bank_blend - distance) / access.bank_blend);
-                h = h * (1. - weight) + (y - 0.35) * weight;
+                // This is the dry island approach. Match its walking datum;
+                // a sub-tread depression can quantize into a trapped puddle.
+                // The separate outside-island fan owns the wet landing margin.
+                h = h * (1. - weight) + y * weight;
             } else if let Some(start) = access.points.first() {
                 let distance = (x - start[0]).hypot(z - start[2]);
                 if distance < access.wet_fan_radius
