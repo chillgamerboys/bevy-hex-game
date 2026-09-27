@@ -75,7 +75,9 @@ impl GrandCompiler {
             return false;
         };
         if reach == 2 {
-            return liquid.top == SEA_TOP;
+            // Reaching mean sea height is not enough: flat river-mouth cells
+            // still need an actual wet connection into the ocean body.
+            return liquid.top == SEA_TOP && liquid.body_id == "grand/ocean";
         }
         let lake = if reach == 0 {
             &d.upper_lake
