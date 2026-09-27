@@ -241,7 +241,7 @@ fn authored_regions(g: &GrandGeography) -> Vec<BiomeRegion> {
         },
         height: None,
     });
-    let mut ellipse = |label, [x, z], [rx, rz], phase| {
+    let mut ellipse = |label: Label, [x, z]: [f64; 2], [rx, rz]: [f64; 2], phase: Option<f64>| {
         regions.push(BiomeRegion {
             label,
             shape: RegionShape::Ellipse {
@@ -668,8 +668,8 @@ mod tests {
     }
 
     #[test]
-    fn companion_validation_rejects_nonfinite_unbounded_and_ambiguous_data()
-    -> Result<(), Box<dyn Error>> {
+    fn companion_validation_rejects_nonfinite_unbounded_and_ambiguous_data(
+    ) -> Result<(), Box<dyn Error>> {
         let (_, map) = fixture()?;
         let mut bad = map.clone();
         bad.version = 3;
@@ -690,8 +690,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_companions_keep_legacy_labels_and_cannot_inject_new_regions()
-    -> Result<(), Box<dyn Error>> {
+    fn legacy_companions_keep_legacy_labels_and_cannot_inject_new_regions(
+    ) -> Result<(), Box<dyn Error>> {
         let mut map: GrandBiomeMap = ron::from_str(
             "(version:1,source_fingerprint:1,package_fingerprint:2,mainland_rows:[],crystal_rows:[])",
         )?;
