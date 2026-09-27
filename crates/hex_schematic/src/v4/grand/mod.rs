@@ -92,6 +92,7 @@ pub struct GrandCompiler {
     ground_cover: Option<super::northern::ground_cover::GroundCover>,
     inland: Option<super::northern::InlandWaterOverview>,
     layered: r02::Layered,
+    r02_flow: BTreeMap<WorldHex, VoxelPosition>,
     coast: Vec<u16>,
     offshore_distance: Vec<u16>,
     crystal: std::collections::BTreeSet<WorldHex>,
@@ -386,6 +387,7 @@ impl GrandCompiler {
             ground_cover: None,
             inland: None,
             layered,
+            r02_flow: BTreeMap::new(),
             coast,
             offshore_distance,
             crystal,
@@ -399,6 +401,7 @@ impl GrandCompiler {
             objects: BTreeMap::new(),
             influences: BTreeMap::new(),
         };
+        result.r02_flow = result.compile_r02_flow()?;
         if !revision02 {
             result.graded_shoulders = terrain::compile_grades(&result)?;
         }

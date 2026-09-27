@@ -90,37 +90,130 @@ impl GrandCompiler {
                 lake.phase,
             ) < 1.
     }
+    /// Establish the complete drainage graph before publishing any chunks.
+    /// Greedily choosing the lowest neighbor can strand a branch at a channel
+    /// bend. Processing the monotone chart backwards admits only edges already
+    /// known to reach the intended lake or sea; no phantom Standing sinks remain.
+    pub(super) fn compile_r02_flow(
+        &self,
+    ) -> Result<BTreeMap<WorldHex, VoxelPosition>, ContractError> {
+        let Some(d) = &self.geography.document else {
+            return Ok(BTreeMap::new());
+        };
+        let mut out = BTreeMap::new();
+        for (reach, channel) in [&d.fountain_rill, &d.falls, &d.river]
+            .into_iter()
+            .enumerate()
+        {
+            let mut cells = std::collections::BTreeSet::new();
+            for pair in channel.points.windows(2) {
+                let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
+                    continue;
+                };
+                let pad = channel.width * 0.5 + 2.;
+                let corners = [
+                    [a[0].min(b[0]) - pad, a[2].min(b[2]) - pad],
+                    [a[0].min(b[0]) - pad, a[2].max(b[2]) + pad],
+                    [a[0].max(b[0]) + pad, a[2].min(b[2]) - pad],
+                    [a[0].max(b[0]) + pad, a[2].max(b[2]) + pad],
+                ]
+                .map(|point| self.geography.world_hex(point));
+                let q0 = corners.iter().map(|p| p.q).min().unwrap_or(0) - 2;
+                let q1 = corners.iter().map(|p| p.q).max().unwrap_or(0) + 2;
+                let r0 = corners.iter().map(|p| p.r).min().unwrap_or(0) - 2;
+                let r1 = corners.iter().map(|p| p.r).max().unwrap_or(0) + 2;
+                for q in q0..=q1 {
+                    for r in r0..=r1 {
+                        let p = WorldHex::new(q, r);
+                        if self.r02_reach(p) == Some(reach) {
+                            cells.insert(p);
+                        }
+                    }
+                }
+                if cells.len() > 100_000 {
+                    return Err(ContractError::new(
+                        "grand.flow",
+                        "authored channel budget exceeded",
+                    ));
+                }
+            }
+            let mut water: BTreeMap<_, _> = cells
+                .into_iter()
+                .filter_map(|p| self.column(p).1.map(|liquid| (p, liquid)))
+                .collect();
+            // Include actual one-ring receivers even beyond the channel mask.
+            let fringe: std::collections::BTreeSet<_> = water
+                .keys()
+                .flat_map(|p| {
+                    DIRS.into_iter()
+                        .map(|(q, r)| WorldHex::new(p.q + q, p.r + r))
+                })
+                .collect();
+            for p in fringe {
+                if !water.contains_key(&p) {
+                    if let Some(liquid) = self.column(p).1.filter(|l| self.r02_receiver(reach, l)) {
+                        water.insert(p, liquid);
+                    }
+                }
+            }
+            let mut ordered: Vec<_> = water.keys().copied().collect();
+            ordered.sort_by(|a, b| r02_progress(*b).total_cmp(&r02_progress(*a)));
+            let mut connected = std::collections::BTreeSet::new();
+            for p in ordered {
+                let Some(liquid) = water.get(&p) else {
+                    continue;
+                };
+                if self.r02_receiver(reach, liquid) {
+                    connected.insert(p);
+                    continue;
+                }
+                let next = DIRS
+                    .into_iter()
+                    .map(|(q, r)| WorldHex::new(p.q + q, p.r + r))
+                    .filter(|n| connected.contains(n) && r02_progress(*n) > r02_progress(p))
+                    .filter_map(|n| water.get(&n))
+                    .filter(|n| n.top <= liquid.top)
+                    .min_by(|a, b| {
+                        a.top
+                            .cmp(&b.top)
+                            .then_with(|| r02_progress(b.column).total_cmp(&r02_progress(a.column)))
+                    });
+                if let Some(next) = next {
+                    out.insert(
+                        p,
+                        VoxelPosition {
+                            column: next.column,
+                            level: next.top - 1,
+                        },
+                    );
+                    connected.insert(p);
+                }
+            }
+            if let Some(liquid) = water.values().find(|l| !connected.contains(&l.column)) {
+                return Err(ContractError::new(
+                    "grand.flow",
+                    format!(
+                        "reach {reach} cannot drain from {:?}, model {:?}, surface {} to its receiver",
+                        liquid.column,
+                        self.geography.model_xz(liquid.column),
+                        liquid.top
+                    ),
+                ));
+            }
+        }
+        Ok(out)
+    }
     fn r02_direct_river(&self, liquid: &mut LiquidColumn) {
         if liquid.body_id != "grand/river" {
             return;
         }
-        let Some(reach) = self.r02_reach(liquid.column) else {
-            return;
-        };
-        let next = DIRS
-            .into_iter()
-            .map(|(q, r)| WorldHex::new(liquid.column.q + q, liquid.column.r + r))
-            .filter(|p| r02_progress(*p) > r02_progress(liquid.column))
-            .filter_map(|p| self.column(p).1)
-            .filter(|n| {
-                n.top <= liquid.top
-                    && (self.r02_reach(n.column) == Some(reach) || self.r02_receiver(reach, n))
-            })
-            .min_by(|a, b| {
-                a.top
-                    .cmp(&b.top)
-                    .then_with(|| r02_progress(b.column).total_cmp(&r02_progress(a.column)))
-            });
-        if let Some(next) = next {
-            liquid.kind = if liquid.top - next.top >= 8 {
+        if let Some(&next) = self.r02_flow.get(&liquid.column) {
+            liquid.kind = if liquid.top - (next.level + 1) >= 8 {
                 LiquidKind::Waterfall
             } else {
                 LiquidKind::Directed
             };
-            liquid.downstream = vec![VoxelPosition {
-                column: next.column,
-                level: next.top - 1,
-            }];
+            liquid.downstream = vec![next];
         }
     }
 }
@@ -142,8 +235,8 @@ mod tests {
         clippy::panic_in_result_fn,
         reason = "Assertions are test oracles; Result propagates only fixture and authoring errors."
     )]
-    fn compiled_channel_chunks_publish_closed_downhill_paths_to_receiving_water(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn compiled_channel_chunks_publish_closed_downhill_paths_to_receiving_water()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut spec: GrandSpec = ron::from_str(include_str!(
             "../../../../../assets/config/v4/grand-v4/world.ron"
         ))?;
@@ -235,8 +328,8 @@ mod tests {
         clippy::panic_in_result_fn,
         reason = "Assertions are test oracles; Result propagates only fixture and authoring errors."
     )]
-    fn every_authored_channel_path_reaches_receiving_lake_or_ocean(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn every_authored_channel_path_reaches_receiving_lake_or_ocean()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut spec: GrandSpec = ron::from_str(include_str!(
             "../../../../../assets/config/v4/grand-v4/world.ron"
         ))?;
@@ -298,8 +391,8 @@ mod tests {
         clippy::panic_in_result_fn,
         reason = "Assertions are test oracles; Result propagates only fixture and authoring errors."
     )]
-    fn authored_channel_links_are_exact_downhill_and_increase_the_wave_chart(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn authored_channel_links_are_exact_downhill_and_increase_the_wave_chart()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut spec: GrandSpec = ron::from_str(include_str!(
             "../../../../../assets/config/v4/grand-v4/world.ron"
         ))?;
