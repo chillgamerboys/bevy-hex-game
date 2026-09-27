@@ -55,7 +55,7 @@ quantization cells, 202 exposed root-approach cells and five other dry cells.
 This graph is diagnostic, not a controller/body or overall traversal pass. The
 202-cell cluster is a real root-corridor roof breach after lowering terrain. L4's
 separate repair `6923941` is integrated as `e02cd98`: all root frames/interior
-endpoints move from model floor36 to35 and closed root ceilings fit below natural
+endpoints move from model floor 36 to 35 and closed root ceilings fit below natural
 ground. All 67 Grand tests and scoped schematic Clippy pass; the complete 559-column
 closed ribbon (341 outside the room) retains exterior terrain and physical body
 clearance. The 686-column room retains at least six natural roof levels above its
@@ -64,18 +64,32 @@ validation is pending; this does not repair the immutable plain06 artifact in pl
 
 The remaining lake-foot controller block occurs where the screening ridge's broad
 lower slope steepens, rather than at an isolated column or export discontinuity.
-L4 next reshapes that ridge's lower tail as one coherent shallow toe, preserving
-the steep upper ridge and lake enclosure. The original controller endpoints and
-limits remain unchanged; fixed-domain loss/gain and cave clearance stay explicit.
+L4's one-control correction `022d2db` is integrated as `04f0e8e`: the existing
+screening-ridge lower-slope power changes 2→3 across the entire five-node body,
+preserving crest controls, water levels and footprint. All 67 Grand tests and
+scoped Clippy pass. Independent source08 review confirms a longer shallow toe and
+no new exposed interiors or artificial cover uplift. Fixed source07→08 membership
+gains 4,378 and loses 427 supports; most losses are high lake/outlet shoulders, with
+12 in a low-foot pocket and 22 scattered. These tradeoffs remain diagnostic rather
+than a traversal pass. Original controller endpoints/limits are unchanged.
 
 L6 has a newly bounded renderer trial on `fix/grand-inland-boundary-ownership`,
 based on `48681ca`, independently of its banked matte experiment. Companion data
 proves an immutable water-boundary corner is raised 35.35 units by the old
 corner-max transition. The default-off trial changes only face ownership at that
 interface; it must preserve true cliffs, stacked voids, caps and bounded meshes.
-It requires focused checks and paired actual pictures before integration. No
-terrain or shader change may substitute for that proof. Root remains the sole
-integration writer; Cargo is serialized, with L4's root repair gate before L6.
+Eight focused regressions, an actual-companion activation/budget check and scoped
+Clippy pass, but the fresh identical-package south off/on pair at `c9de7fe` does
+not resolve the dominant visible fan/contrast defect. The diagnosed owner is
+active in that pair. The trial is banked separately and is not integrated; no
+further angles are being captured for this failed visual target. Root remains the
+sole integration writer and Cargo remains serialized.
+
+Next is the first dressed revision02 candidate from the corrected source, using
+the unchanged production renderer. Its emitted terrain graph excludes separate
+authored object occupancy; real controller checks include that occupancy. Initial
+world/tree/forest/garden/falls pictures precede full logical restart, walking,
+sailing, admission and residency checks. Distant presentation defects remain open.
 
 Receipts are retained under task `outputs/grand-r02-plain06-pipeline.json`,
 `work/grand-plain06-independent-review-01`, emitted/membership diagnostics and the
