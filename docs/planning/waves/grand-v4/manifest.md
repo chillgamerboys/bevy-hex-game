@@ -558,3 +558,58 @@ experiment. Its geometry/lifecycle tests are bounded diagnostics. It remains
 excluded from the integration candidate pending an actual same-camera A/B;
 neither buffer reduction nor source tests establish visual acceptance or frame
 times. Plain03 will first use the ordinary renderer.
+
+### Plain03 results and the next terrain correction
+
+Clean `125bca9e1bc52b89e4e293d88300a3458c35bce4` produced immutable
+`compiled-r02-plain-03`, package `16875485525297679669`, source
+`16888759810678694584`. Strict readback passed: 3,323,269 columns, 13,134 chunks,
+2,608,300 liquids and no objects. Mainland remains 653,261 columns (6.999775×),
+Crystal 22,201 (7.005680×). The same-domain exterior survey gains a net 40,006
+columns in its largest dry one-level-edge component; this is not body traversal.
+
+All three unchanged dry controller probes pass, including the two former western
+stalls. The same mixed crossing now enters and swims safely but cannot climb its
+three-level opposite bank. Source improvements do not relabel that failed run.
+Eleven requested frames succeeded before the lower-library frame failed coverage;
+upper library was not attempted. Both reviewers inspected all twelve produced
+originals and the contact sheet. Wider low ground is visible, but the regular
+Crystal body, raised Frozen shelf, narrow peaks and detailed/distant seams remain
+visual failures. These focused diagnostics do not complete the 47-view matrix.
+
+The camera defect is separately fixed in `ec672ff`: ground admission selects the
+nearest clear stacked support and bounds authored height adjustment, rather than
+choosing a column's highest roof. Six camera tests, scoped app Clippy and two fresh
+windowless library captures pass mechanically. Their gray plain-room appearance
+does not establish final library presentation, dressing or movement.
+
+Current continuation ownership and dependencies are explicit:
+
+- World terrain (`fix/grand-r02-ridge-saddles`) owns schematic geography, shores,
+  the garden landing, cave/route supports and content. Bank source `e9d778a` and
+  garden `4880178`/`753e6df` have landed additively as `dd879b1`, `ff65f27` and
+  `c66fa88`. Focused emitted shore/flow, garden clearance/isolation/rim checks and
+  schematic Clippy passed in the lane. A new package and actual controller checks
+  remain merge dependencies for accepting their combined behavior.
+- Gameplay mobility (`fix/grand-shallow-water-handoff`) owns only the two
+  `hex_arena` marine files. `359958e` landed as `83b1677`: supported shallow Grand
+  swimmers return to ordinary walking without a raised step or position snap.
+  All 27 marine tests and scoped arena Clippy pass, including deep-bottom, tall
+  wall, loading and WaterLab cases. This is a gameplay assignment, separate from
+  the earlier world-owned L5 dressing lane; reuse of a worker does not change
+  either authority. Its final acceptance depends on the new world package.
+- Runtime presentation (`fix/grand-terrain-boundaries`) owns `hex_map` boundary
+  experiments and diagnostics. Both the dry-cap and direct boundary prototypes
+  are banked and excluded: exact-camera A/B frames did not visibly resolve the
+  dominant teeth or detailed/distant transitions. Buffer counts and passing
+  geometry tests do not authorize integration. A bounded actual-mesh diagnostic
+  investigates the remaining visible faces before another repair.
+- The coordinator owns `hex_game` camera wiring, shared review tooling and this
+  integration branch. Source lanes can proceed independently; all captures freeze
+  one clean source and immutable package, and shared Cargo work is serialized.
+
+The wider mountain draft is not accepted merely because its 56 source tests pass.
+An independent final-column comparison found major old-foot connectivity losses
+east of Crystal. It remains outside integration while common low-tail controls
+are corrected and the same neighborhoods are compared again. Do not patch the
+test lines, move their endpoints or replace the regional check with passing paths.

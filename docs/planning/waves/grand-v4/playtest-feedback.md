@@ -145,3 +145,19 @@ can establish the actual controller result. The western repair composes the
 coastal foot and mountain body rather than adding their slopes, and broadens the
 western summit. Its library and Air route must be refitted inside the new rock;
 the old room elevations are not a reason to inflate the mountain again.
+
+Plain03 now passes all three unchanged dry foothill controller probes. The mixed
+crossing enters and swims but stalls at the opposite bank; the emitted step is
+three voxel levels. New bank source reduces that specific edge and the measured
+northwest lower-lake cliff to one level. The separate shallow-water handoff keeps
+the normal walking step limit. Both changes need a new compiled package and the
+same mixed crossing before calling the river access fixed.
+
+The new game pictures still fail general mountain presentation: the Crystal
+exterior reads as a regular drum, its Frozen connection as a raised ribbon, and
+several enclosing peaks as thin spires. Detailed/distant boundary wedges are a
+separate unresolved rendering defect. A proposed wider mountain profile improved
+the source silhouette but destroyed much of a previously connected low-ground
+region east of Crystal; it has not been integrated. Lower-ground continuity takes
+priority while refining that profile. Preserve the steep inner ascent and hidden
+lake screens, while joining their outer bodies to usable lower terrain.
