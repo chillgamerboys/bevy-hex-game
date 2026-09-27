@@ -334,6 +334,20 @@ impl Layered {
             true,
             [false, false],
         )?;
+        if let Some(access) = &d.garden_access {
+            out.route(
+                g,
+                coast,
+                "garden_ascent",
+                "garden_landing",
+                "garden",
+                &access.points,
+                access.width,
+                SupportLayer::Exterior,
+                true,
+                [false, false],
+            )?;
+        }
         out.route(
             g,
             coast,
@@ -578,6 +592,7 @@ impl GrandCompiler {
 #[cfg(test)]
 mod cave_cover_tests {
     use super::*;
+    use std::collections::BTreeSet;
     #[test]
     fn closed_cave_cover_never_inflates_approved_landforms() {
         let compiler = tests::compiler(false);
@@ -676,5 +691,74 @@ mod cave_cover_tests {
                 );
             }
         }
+    }
+    #[test]
+    fn garden_landing_has_a_shallow_water_join_and_open_court_route() {
+        let compiler = tests::compiler(true);
+        let route = compiler
+            .layered
+            .routes
+            .iter()
+            .find(|r| r.id == "garden_ascent")
+            .expect("garden access is part of the authored expedition");
+        let first = route.supports.first().expect("landing support");
+        let last = route.supports.last().expect("court support");
+        for support in route.supports.iter().chain(&route.ribbon) {
+            assert!(
+                compiler.clear_support(*support, 8),
+                "blocked garden support {support:?}"
+            );
+        }
+        for pair in route.supports.windows(2) {
+            let [a, b] = pair else { unreachable!() };
+            assert!(a.level.abs_diff(b.level) <= 1, "garden riser {a:?}->{b:?}");
+        }
+        let neighbors = [[1_i64, 0], [0, 1], [-1, 1], [-1, 0], [0, -1], [1, -1]];
+        let mut domain = BTreeMap::new();
+        for q in -12_i64..=12 {
+            for r in -12_i64..=12 {
+                let p = WorldHex::new(first.column.q + q, first.column.r + r);
+                let (column, liquid) = compiler.column(p);
+                let top = column
+                    .runs
+                    .iter()
+                    .filter(|run| run.material != "water")
+                    .map(|run| run.top)
+                    .max()
+                    .expect("lake or island ground");
+                domain.insert(p, (top, liquid));
+            }
+        }
+        let mut reached = BTreeSet::from([first.column]);
+        let mut queue = std::collections::VecDeque::from([first.column]);
+        while let Some(p) = queue.pop_front() {
+            let (top, _) = domain.get(&p).expect("bounded support");
+            for [q, r] in neighbors {
+                let n = WorldHex::new(p.q + q, p.r + r);
+                if domain
+                    .get(&n)
+                    .is_some_and(|(other, _)| top.abs_diff(*other) <= 1)
+                    && reached.insert(n)
+                {
+                    queue.push_back(n);
+                }
+            }
+        }
+        assert!(
+            reached
+                .iter()
+                .any(|p| domain.get(p).is_some_and(|(top, liquid)| {
+                    liquid
+                        .as_ref()
+                        .is_some_and(|water| (1..=2).contains(&(water.top - top)))
+                })),
+            "island landing is isolated from its shallow submerged margin"
+        );
+        let garden = compiler.geography.frame("garden").expect("court frame");
+        let support = compiler.support_at(&garden, [0., 0.]).expect("court floor");
+        assert_eq!(
+            *last, support,
+            "the route must join the original garden court"
+        );
     }
 }

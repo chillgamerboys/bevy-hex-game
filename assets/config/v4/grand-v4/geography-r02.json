@@ -2923,5 +2923,43 @@
     "western_relief": 315.0,
     "western_radius_multiplier": 1.0,
     "western_power": 3.0
+  },
+  "garden_access": {
+    "points": [
+      [
+        354,
+        205.15,
+        609
+      ],
+      [
+        365,
+        207.25,
+        614
+      ],
+      [
+        376,
+        209.35,
+        620
+      ],
+      [
+        376,
+        210.4,
+        627
+      ],
+      [
+        366,
+        212.15,
+        633
+      ],
+      [
+        360,
+        213,
+        640
+      ]
+    ],
+    "width": 6,
+    "bank_blend": 8,
+    "wet_fan_radius": 24,
+    "wet_edge_depth": 0.35
   }
 }

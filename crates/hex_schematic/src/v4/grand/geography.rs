@@ -28,6 +28,8 @@ pub struct GrandGeographyDocument {
     #[serde(default)]
     pub(super) upper_lake_shore: Option<LakeShore>,
     pub(super) garden: Ellipse,
+    #[serde(default)]
+    pub(super) garden_access: Option<GardenAccess>,
     pub(super) falls: Watercourse,
     pub(super) lower_lake: Lake,
     #[serde(default)]
@@ -97,6 +99,13 @@ shape!(Coast {center:[f64;2],radii:[f64;2],phase:f64,coves:Vec<[f64;4]>});
 shape!(Ellipse {
     center: [f64; 2],
     radii: [f64; 2]
+});
+shape!(GardenAccess {
+    points: Vec<[f64; 3]>,
+    width: f64,
+    bank_blend: f64,
+    wet_fan_radius: f64,
+    wet_edge_depth: f64
 });
 shape!(Lake {
     center: [f64; 2],
@@ -233,6 +242,19 @@ impl GrandGeographyDocument {
                     || !(4. ..=30.).contains(&b.plunge_buffer)
                     || !(0. ..=1.).contains(&b.dry_lip)
                     || !(1.5..=3.).contains(&b.shelf_power)
+            })
+            || self.garden_access.as_ref().is_some_and(|a| {
+                !path(&a.points)
+                    || a.points.len() > 16
+                    || !(4. ..=10.).contains(&a.width)
+                    || !(4. ..=16.).contains(&a.bank_blend)
+                    || !(12. ..=32.).contains(&a.wet_fan_radius)
+                    || !(0.35..=0.7).contains(&a.wet_edge_depth)
+                    || a.points.iter().any(|p| {
+                        ellipse([p[0], p[2]], self.garden.center, self.garden.radii) > 1.
+                            || !(self.upper_lake.level..=self.upper_lake.level + 10.)
+                                .contains(&p[1])
+                    })
             })
             || !(100. ..=1000.).contains(&f.minimum_radius)
             || !(1. ..=150.).contains(&f.apron_relief)

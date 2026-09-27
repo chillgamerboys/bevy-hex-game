@@ -311,6 +311,36 @@ fn finish_terrain_profiled(
     if gr < 1. {
         h = h.max(d.upper_lake.level + 5. + 3. * clamp(1. - gr));
     }
+    if profiles {
+        if let Some(access) = &d.garden_access {
+            let (distance, y, _) = route_distance([x, z], &access.points);
+            if gr < 1. {
+                // A supported cut into the island approaches the unchanged
+                // court along a curve. The layered open treads publish its
+                // final ordinary risers; its sides meet the garden soil.
+                let weight =
+                    smooth((access.width * 0.5 + access.bank_blend - distance) / access.bank_blend);
+                h = h * (1. - weight) + (y - 0.35) * weight;
+            } else if let Some(start) = access.points.first() {
+                let distance = (x - start[0]).hypot(z - start[2]);
+                if distance < access.wet_fan_radius
+                    && irregular(
+                        [x, z],
+                        d.upper_lake.center,
+                        d.upper_lake.radii,
+                        d.upper_lake.phase,
+                    ) < 1.
+                {
+                    // This fan remains submerged and entirely inside the lake;
+                    // it creates a swim-to-walk margin, never a shore bridge.
+                    let depth = access.wet_edge_depth
+                        + (7. - access.wet_edge_depth)
+                            * smooth(distance / access.wet_fan_radius).powi(2);
+                    h = h.max(d.upper_lake.level - depth);
+                }
+            }
+        }
+    }
     for channel in [&d.falls, &d.river] {
         let (dist, target, _) = route_distance([x, z], &channel.points);
         let half = channel.width * 0.5;

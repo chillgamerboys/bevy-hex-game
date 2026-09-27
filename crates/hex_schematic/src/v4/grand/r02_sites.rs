@@ -133,6 +133,22 @@ impl GrandCompiler {
                 role: AnchorRole::Observation,
             });
         }
+        if d.garden_access.is_some() {
+            let position = self
+                .layered
+                .routes
+                .iter()
+                .find(|route| route.id == "garden_ascent")
+                .and_then(|route| route.supports.first())
+                .copied()
+                .ok_or_else(|| ContractError::new("grand.site", "missing garden landing"))?;
+            out.push(WorldAnchor {
+                id: "grand/anchor/garden_landing".into(),
+                region_id: "grand".into(),
+                position,
+                role: AnchorRole::Observation,
+            });
+        }
         // Starting boat position lies just offshore from the authored mainland beach.
         out.push(WorldAnchor {
             id: "grand/anchor/sailing_start".into(),
