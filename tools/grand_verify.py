@@ -247,7 +247,9 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
         routes = receipt.get("routes", [])
         expected = receipt.get("route_names", [])
         required_probes = {"forest_north", "forest_south", "forest_east", "forest_west",
-                           "river_bank_escape", "river_bank_along", "valley_crossing"}
+                           "river_bank_escape", "river_bank_along", "valley_crossing",
+                           "grand-west-foothill-crossing", "grand-west-foothill-uphill",
+                           "grand-lake-foothill-crossing", "grand-lake-foothill-uphill"}
         if (receipt.get("selected_route") is not None or not required_probes <= set(expected)
                 or not any(route.get("category") == "authored_connection" for route in routes)
                 or receipt.get("expected_routes") != len(expected)

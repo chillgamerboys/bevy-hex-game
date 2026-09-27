@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 VIEWS = ("grand-overview", "grand-mainland", "grand-mainland-south", "grand-mainland-east", "grand-mainland-northwest",
          "grand-crystal-frozen", "grand-valley-tree-bank", "grand-valley-lake-bank",
          "grand-valley-waterfall-approach",
+         "grand-west-foothill-crossing", "grand-west-foothill-uphill",
+         "grand-lake-foothill-crossing", "grand-lake-foothill-uphill",
          "grand-garden", "grand-garden-ground", "grand-waterfall",
          "grand-valley-lake", "grand-world-tree", "grand-roots-entrance", "grand-shrine-plant",
          "grand-forest", "grand-forest-ground", "grand-forest-ground-reverse", "grand-river-exit",
@@ -30,9 +32,11 @@ VIEWS = ("grand-overview", "grand-mainland", "grand-mainland-south", "grand-main
 MOTION_ROUTE = (
     "Start at the beach; enter water, deploy/steer/fold the boat, sail to Fire; "
     "walk off both riverbanks into the hills and through the forest in both directions; "
-    "land on the island and walk its ascent; follow the river to the world tree and garden, "
-    "then water to the waterfall cave; "
-    "walk both library branches, Shadow tunnel, Crystal Ascent and summit; glide down. "
+    "cross the western and lake-front foothills laterally and uphill; "
+    "land on the island and walk its ascent; return to the mainland and follow the river "
+    "to the lakeside world tree and waterfall cave; walk both library branches and summit. "
+    "Return to the separate Shadow approach, climb Crystal Ascent and follow Frozen Woods "
+    "to the hidden mountain lake and garden island; glide down. "
     "Activate shrines, defeat Shadow, test valid and refused teleport, die/respawn. "
     "Save/restart on land, sailing and airborne; complete a 30-minute circuit and inspect seams both ways."
 )

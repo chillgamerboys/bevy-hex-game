@@ -133,10 +133,10 @@ class GrandCaptureProvenanceTests(unittest.TestCase):
         self.assertEqual(receipt["matrix_scope"], "FOCUSED-DIAGNOSTIC")
         self.assertEqual(receipt["mechanical_status"], "PARTIAL_COMPLETE")
         self.assertFalse(receipt["full_matrix_completed"])
-        self.assertEqual(len(receipt["missing_views"]), 41)
+        self.assertEqual(len(receipt["missing_views"]), 45)
 
     def test_full_matrix_needs_every_declared_frame(self):
-        self.assertEqual(len(grand_capture.VIEWS), 43)
+        self.assertEqual(len(grand_capture.VIEWS), 47)
         receipt = self.receipt()
         grand_capture.complete_matrix(receipt)
         self.assertTrue(receipt["full_matrix_completed"])
@@ -157,7 +157,7 @@ class GrandCaptureProvenanceTests(unittest.TestCase):
         receipt["mechanical_status"] = "BLOCKED"
         receipt["error"] = "Source/package changed during capture"
         grand_capture.update_coverage(receipt)
-        self.assertEqual(len(receipt["completed_views"]), 43)
+        self.assertEqual(len(receipt["completed_views"]), 47)
         self.assertFalse(receipt["full_matrix_completed"])
 
 

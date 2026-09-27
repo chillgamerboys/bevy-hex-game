@@ -73,6 +73,27 @@ fn routes(world: &World) -> Vec<Route> {
         ],
         stacked: false,
     });
+    // Fixed geographical samples span the changed mountain feet. These use
+    // published review frames, not a terrain search for favorable paths. The
+    // ordinary controller still decides each step; the full-region graph and
+    // ground-level review remain separate evidence for broader usability.
+    for name in [
+        "grand-west-foothill-crossing",
+        "grand-west-foothill-uphill",
+        "grand-lake-foothill-crossing",
+        "grand-lake-foothill-uphill",
+    ] {
+        let frame = overview
+            .review_cameras
+            .get(name)
+            .expect("world-published foothill review frame");
+        routes.push(Route {
+            name: name.into(),
+            category: "foothill_cross_country",
+            points: vec![frame.eye, frame.target],
+            stacked: false,
+        });
+    }
     let view = world.resource::<ArenaTerrainView>();
     let geometry = *world.resource::<ArenaVoxelGeometry>();
     let sites = view
