@@ -9,7 +9,7 @@ use hex_world_contracts::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-pub use surface::{forest_mesh, ForestMesh};
+pub use surface::{ForestMesh, forest_mesh};
 
 /// Maximum different shared authored shapes, including snowy palette variants.
 pub const MAX_FOREST_SHAPES: usize = 18;
@@ -114,6 +114,19 @@ pub(super) fn forest_foliage_column(point: WorldHex) -> WorldHex {
 impl ForestOverview {
     /// Validate fixed shape/instance limits, exact footprints, and mesh budgets.
     pub fn validate(&self) -> Result<(), ContractError> {
+        self.validate_in_bounds(900, [0, 1600])
+    }
+    /// Validate within a package's admitted finite envelope, keeping all mesh budgets.
+    pub fn validate_in_bounds(&self, radius: u32, levels: [i32; 2]) -> Result<(), ContractError> {
+        let [minimum, maximum] = levels;
+        if radius == 0
+            || radius > u32::from(i16::MAX.unsigned_abs())
+            || minimum < 0
+            || maximum > i32::from(i16::MAX)
+            || minimum >= maximum
+        {
+            return Err(invalid("invalid forest finite envelope"));
+        }
         if self.version != 1
             || self.shapes.len() > MAX_FOREST_SHAPES
             || self.instances.len() > MAX_FOREST_INSTANCES
@@ -168,9 +181,9 @@ impl ForestOverview {
                     .origin
                     .column
                     .checked_distance(WorldHex::new(0, 0))?
-                    > 900
-                || !(0..=1600).contains(&instance.origin.level)
-                || !(0..=1486).contains(&instance.base_level)
+                    > u64::from(radius)
+                || !(minimum..=maximum).contains(&instance.origin.level)
+                || !(minimum..=maximum).contains(&instance.base_level)
                 || instance.roots.len() > 64
                 || instance.footprint.len() > 16
                 || instance.footprint.is_empty()
@@ -180,11 +193,11 @@ impl ForestOverview {
             validate_columns(&instance.roots, true)?;
             let columns = instance.columns(shape)?;
             for column in &columns {
-                if column.position.checked_distance(WorldHex::new(0, 0))? > 900
+                if column.position.checked_distance(WorldHex::new(0, 0))? > u64::from(radius)
                     || column
                         .runs
                         .iter()
-                        .any(|run| run.bottom < 0 || run.top > 1600)
+                        .any(|run| run.bottom < minimum || run.top > maximum)
                 {
                     return Err(invalid("forest world source exceeds finite bounds"));
                 }
@@ -230,7 +243,16 @@ impl ForestOverview {
         &self,
         features: &[hex_world_contracts::FeatureSummary],
     ) -> Result<(), ContractError> {
-        self.validate()?;
+        self.validate_catalog_in_bounds(features, 900, [0, 1600])
+    }
+    /// Bind exact public object facts within the same admitted finite envelope.
+    pub fn validate_catalog_in_bounds(
+        &self,
+        features: &[hex_world_contracts::FeatureSummary],
+        radius: u32,
+        levels: [i32; 2],
+    ) -> Result<(), ContractError> {
+        self.validate_in_bounds(radius, levels)?;
         let catalog: BTreeMap<_, _> = features
             .iter()
             .filter(|f| f.id.starts_with("grand/tree/"))
