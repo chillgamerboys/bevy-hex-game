@@ -569,7 +569,7 @@ mod cave_cover_tests {
             let water = g.top_level(water);
             for layer in layered.columns.get(&p).into_iter().flatten() {
                 assert!(
-                    layer.top <= bed || layer.top - 2 >= water,
+                    layer.top <= bed,
                     "library slab {:?}..{} dams receiving pool {p:?}:{bed}..{water}",
                     layer.top - 2,
                     layer.top

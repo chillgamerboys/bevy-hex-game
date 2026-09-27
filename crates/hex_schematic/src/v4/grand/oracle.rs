@@ -202,9 +202,36 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
             // A channel has an authored supported bed even where the previous
             // lowland was lower than it. Merely taking min leaves deep gaps.
             h = target - 3.;
-        } else if dist < bank {
-            let blend = smooth((bank - dist) / 20.);
-            let retained_bank = target + 1.;
+        } else if dist < bank
+            && ![&d.upper_lake, &d.lower_lake].into_iter().any(|lake| {
+                irregular([x, z], lake.center, lake.radii, lake.phase) < 1.
+            })
+        {
+            // A bank must not form a ring dam across the lake at an intake or
+            // receiving pool. Gorge reaches also retain a full dry collar:
+            // their valley floor can be far below the authored water datum.
+            let collar = if target > d.lower_lake.level {
+                channel.width * 0.12
+            } else {
+                0.
+            };
+            let blend = smooth((bank - dist) / (20. - collar));
+            let mut retained_bank = target + 1.;
+            // On a short descending reach the nearest centerline datum can be
+            // below the water immediately upstream across a hex edge. Retain
+            // that adjacent water too; this changes the supporting bank only.
+            let scale = d.transform.horizontal_scale;
+            for [dx, dz] in [
+                [3_f64.sqrt(), 0.], [-3_f64.sqrt(), 0.],
+                [3_f64.sqrt() * 0.5, 1.5], [-3_f64.sqrt() * 0.5, 1.5],
+                [3_f64.sqrt() * 0.5, -1.5], [-3_f64.sqrt() * 0.5, -1.5],
+            ] {
+                let (neighbor_distance, neighbor_level, _) =
+                    route_distance([x + dx / scale, z + dz / scale], &channel.points);
+                if neighbor_distance < half {
+                    retained_bank = retained_bank.max(neighbor_level + 0.35);
+                }
+            }
             h = h * (1. - blend) + retained_bank * blend;
         }
     }
