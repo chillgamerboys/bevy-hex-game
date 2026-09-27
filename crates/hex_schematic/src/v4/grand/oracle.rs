@@ -370,12 +370,25 @@ fn finish_terrain_profiled(
                 [3_f64.sqrt() * 0.5, -1.5],
                 [-3_f64.sqrt() * 0.5, -1.5],
             ] {
+                let neighbor = [x + dx / scale, z + dz / scale];
                 let (neighbor_distance, neighbor_level, _) =
-                    route_distance([x + dx / scale, z + dz / scale], &channel.points);
+                    route_distance(neighbor, &channel.points);
                 if neighbor_distance < half {
                     retained_bank = retained_bank.max(neighbor_level + 0.35 * (1. - ordinary));
                     adjacent_water =
                         Some(adjacent_water.map_or(neighbor_level, |old| old.max(neighbor_level)));
+                }
+                if profiles {
+                    // A descending outlet also borders the receiving/source
+                    // basin. Its dry side must contain that neighbouring lake
+                    // datum, not only the lower nearest channel sample.
+                    for lake in [&d.upper_lake, &d.lower_lake] {
+                        if irregular(neighbor, lake.center, lake.radii, lake.phase) < 1. {
+                            retained_bank = retained_bank.max(lake.level);
+                            adjacent_water =
+                                Some(adjacent_water.map_or(lake.level, |old| old.max(lake.level)));
+                        }
+                    }
                 }
             }
             h = h * (1. - blend) + retained_bank * blend;
@@ -409,24 +422,57 @@ fn finish_terrain_profiled(
     h
 }
 
-/// A narrow, irregular dry shore joins the existing enclosing mountain body.
-/// Its datum does not depend on the mountain height immediately outside the
-/// basin, so the lake mask cannot cut a fifty-metre vertical wall at the water.
+/// Irregular wet/dry margins join their own basin to the surrounding land.
+/// The upper shore preserves the exact Frozen arrival; the lower shore has no
+/// mountain-route exception and joins the broadly traversable valley floor.
 fn lake_shore(d: &GrandGeographyDocument, [x, z]: [f64; 2], h: f64) -> f64 {
+    let h = d
+        .lower_lake_shore
+        .as_ref()
+        .map_or(h, |s| lake_bank(&d.lower_lake, s, [x, z], h));
     let Some(s) = &d.upper_lake_shore else {
         return h;
     };
-    let lake = &d.upper_lake;
+    let shore = lake_bank(&d.upper_lake, s, [x, z], h);
+    // Preserve the exact upper stair/forest arrival and its dry landing.
+    let (frozen_distance, _, _) = route_distance([x, z], &d.frozen_route.points);
+    let route_weight = smooth((frozen_distance - d.frozen_route.width * 0.5 - 5.) / 15.);
+    let landing = ellipse([x, z], d.frozen_landing.center, d.frozen_landing.radii);
+    let weight = route_weight * smooth((landing - 1.) / 0.5);
+    h * (1. - weight) + shore * weight
+}
+
+fn lake_bank(
+    lake: &super::geography::Lake,
+    s: &super::geography::LakeShore,
+    [x, z]: [f64; 2],
+    h: f64,
+) -> f64 {
     let r = irregular([x, z], lake.center, lake.radii, lake.phase);
-    if r < 1. {
+    if r < 1. && s.wet_width.is_none() {
         return h;
     }
     let dx = x - lake.center[0];
     let dz = z - lake.center[1];
     let angle = (dz / lake.radii[1]).atan2(dx / lake.radii[0]);
-    let distance = (r - 1.) * dx.hypot(dz) / r;
+    let distance = if r > 1e-9 {
+        (r - 1.) * dx.hypot(dz) / r
+    } else {
+        -lake.radii[0].min(lake.radii[1])
+    };
     let variation =
         clamp(0.5 + 0.3 * (2. * angle + s.phase).sin() + 0.2 * (3. * angle - 0.7).cos());
+    if distance < 0. {
+        let Some((width, edge_depth)) = s.wet_width.zip(s.wet_edge_depth) else {
+            return h;
+        };
+        let width = width[0] + (width[1] - width[0]) * variation;
+        // Keep a broad, shallow outer bed before descending into the basin.
+        // Squaring the smooth ramp keeps the near-surface gradient gentle;
+        // deeper underwater relief need not become a walking staircase.
+        let depth = edge_depth + (7. - edge_depth) * smooth(-distance / width).powi(2);
+        return lake.level - depth;
+    }
     let shelf = s.shelf_width[0] + (s.shelf_width[1] - s.shelf_width[0]) * variation;
     let outer = s.outer_blend[0] + (s.outer_blend[1] - s.outer_blend[0]) * (1. - variation);
     if distance >= shelf + outer {
@@ -434,13 +480,7 @@ fn lake_shore(d: &GrandGeographyDocument, [x, z]: [f64; 2], h: f64) -> f64 {
     }
     let target = s.shelf_level + s.shelf_grade * distance.min(shelf);
     let blend = smooth((distance - shelf) / outer);
-    let shore = target * (1. - blend) + h * blend;
-    // Preserve the exact upper stair/forest arrival and its dry landing.
-    let (frozen_distance, _, _) = route_distance([x, z], &d.frozen_route.points);
-    let route_weight = smooth((frozen_distance - d.frozen_route.width * 0.5 - 5.) / 15.);
-    let landing = ellipse([x, z], d.frozen_landing.center, d.frozen_landing.radii);
-    let weight = route_weight * smooth((landing - 1.) / 0.5);
-    h * (1. - weight) + shore * weight
+    target * (1. - blend) + h * blend
 }
 
 /// Ordinary channel sides have shallow shelves. Steep waterfall segments and
@@ -455,7 +495,6 @@ fn ordinary_bank_weight(
     };
     let mut closest = f64::INFINITY;
     let mut ordinary = false;
-    let mut steep = f64::INFINITY;
     for pair in channel.points.windows(2) {
         let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
             continue;
@@ -465,9 +504,6 @@ fn ordinary_bank_weight(
         if distance < closest {
             closest = distance;
             ordinary = grade <= profile.max_longitudinal_grade;
-        }
-        if grade > profile.max_longitudinal_grade {
-            steep = steep.min(distance);
         }
     }
     if ordinary {
@@ -481,7 +517,11 @@ fn ordinary_bank_weight(
                 1.
             }
         });
-        mouth * smooth((steep - channel.width * 0.5 - 2.) / profile.plunge_buffer)
+        // A neighbouring plunge must not turn an ordinary reach's shallow
+        // side into a submerged wall. The actual steep segment retains its
+        // full depth below; regular receiving pools retain a deep centre and
+        // shallow lateral margins. Only the ocean terminal keeps its buffer.
+        mouth
     } else {
         0.
     }
@@ -629,6 +669,104 @@ mod profile_tests {
             assert!(ordinary_bank_weight(&d, point, channel).abs() < 1e-9);
             assert!(
                 (finish_terrain(&d, point, 60.) - finish_terrain(&old, point, 60.)).abs() < 1e-9
+            );
+        }
+    }
+
+    #[test]
+    fn lower_lake_margin_keeps_water_outline_and_varied_shore_widths() {
+        let d = document();
+        let lake = &d.lower_lake;
+        let shore = d.lower_lake_shore.as_ref().expect("lower lake shore");
+        assert!((lake_bank(lake, shore, lake.center, 90.) - (lake.level - 7.)).abs() < 1e-9);
+        let mut inner_heights = Vec::new();
+        for i in 0_u16..24 {
+            let angle = f64::from(i) * std::f64::consts::TAU / 24.;
+            let outline =
+                1. + 0.08 * (3. * angle + lake.phase).sin() + 0.04 * (5. * angle - 0.7).cos();
+            let radial = [lake.radii[0] * angle.cos(), lake.radii[1] * angle.sin()];
+            let radius = radial[0].hypot(radial[1]);
+            let at = |distance: f64| {
+                [
+                    lake.center[0] + radial[0] * (outline + distance / radius),
+                    lake.center[1] + radial[1] * (outline + distance / radius),
+                ]
+            };
+            let wet = lake_bank(lake, shore, at(-1.), 90.);
+            let dry = lake_bank(lake, shore, at(1.), 90.);
+            assert!(wet < lake.level && dry >= lake.level);
+            assert!(
+                dry - wet < 0.4,
+                "near-shore profile at {angle}: {wet}->{dry}"
+            );
+            assert!((lake_bank(lake, shore, at(140.), 90.) - 90.).abs() < 1e-9);
+            inner_heights.push(lake_bank(lake, shore, at(-20.), 90.));
+        }
+        let minimum = inner_heights.iter().copied().fold(f64::INFINITY, f64::min);
+        let maximum = inner_heights
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            maximum - minimum > 0.5,
+            "the wet shelf must vary around the basin"
+        );
+    }
+
+    #[test]
+    fn emitted_shores_remove_observed_pool_and_lake_lips() {
+        use hex_world_contracts::WorldHex;
+        let g = super::super::tests::compiler(false);
+        // The first pair stopped the unchanged mixed traversal in plain03.
+        // The second is the measured northwestern lower-lake mask cliff.
+        // These regressions keep actual column authority; swim/ground handoff
+        // and complete traversal are verified by the separate app harness.
+        for [wet, dry] in [[[666, -90], [667, -90]], [[541, -38], [540, -38]]] {
+            let (wet_column, liquid) = g.column(WorldHex::new(wet[0], wet[1]));
+            let liquid = liquid.expect("lake or regular receiving-pool water");
+            let wet_top = wet_column
+                .runs
+                .iter()
+                .filter(|run| run.material != "water")
+                .map(|run| run.top)
+                .max()
+                .expect("submerged support");
+            let (dry_column, dry_liquid) = g.column(WorldHex::new(dry[0], dry[1]));
+            assert!(dry_liquid.is_none(), "shore must stay dry");
+            let dry_top = dry_column
+                .runs
+                .iter()
+                .map(|run| run.top)
+                .max()
+                .expect("dry support");
+            assert!(dry_top >= liquid.top, "shore still contains adjacent water");
+            assert!(
+                dry_top.abs_diff(wet_top) <= 1,
+                "observed bank {wet:?}->{dry:?}: {wet_top}->{dry_top}"
+            );
+            eprintln!(
+                "SHORE_REPAIR {wet:?}->{dry:?}: bed={wet_top} water={} dry={dry_top}",
+                liquid.top
+            );
+        }
+        // The lake's outgoing river used to leave dry banks below the adjacent
+        // basin water because it considered only the descending river datum.
+        for [wet, dry] in [[[513, 55], [512, 56]], [[526, 59], [525, 60]]] {
+            let liquid = g
+                .column(WorldHex::new(wet[0], wet[1]))
+                .1
+                .expect("lake outlet");
+            let (column, water) = g.column(WorldHex::new(dry[0], dry[1]));
+            assert!(water.is_none(), "existing outlet bank remains dry");
+            let top = column
+                .runs
+                .iter()
+                .map(|run| run.top)
+                .max()
+                .expect("outlet bank");
+            assert!(
+                top >= liquid.top,
+                "dry outlet bank {dry:?} leaks lake water"
             );
         }
     }

@@ -30,6 +30,8 @@ pub struct GrandGeographyDocument {
     pub(super) garden: Ellipse,
     pub(super) falls: Watercourse,
     pub(super) lower_lake: Lake,
+    #[serde(default)]
+    pub(super) lower_lake_shore: Option<LakeShore>,
     pub(super) river: Watercourse,
     #[serde(default)]
     pub(super) ordinary_channel_banks: Option<ChannelBanks>,
@@ -103,13 +105,19 @@ shape!(Lake {
     phase: f64
 });
 shape!(Watercourse {width:f64,points:Vec<[f64;3]>});
-shape!(LakeShore {
-    shelf_width: [f64; 2],
-    outer_blend: [f64; 2],
-    shelf_level: f64,
-    shelf_grade: f64,
-    phase: f64
-});
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LakeShore {
+    pub shelf_width: [f64; 2],
+    pub outer_blend: [f64; 2],
+    pub shelf_level: f64,
+    pub shelf_grade: f64,
+    pub phase: f64,
+    #[serde(default)]
+    pub wet_width: Option<[f64; 2]>,
+    #[serde(default)]
+    pub wet_edge_depth: Option<f64>,
+}
 shape!(ChannelBanks {
     max_longitudinal_grade: f64,
     plunge_buffer: f64,
@@ -197,15 +205,28 @@ impl GrandGeographyDocument {
                 || !(0.75..=1.5).contains(&p.western_radius_multiplier)
                 || !(1. ..=4.).contains(&p.western_power)
         }) || !(1. ..=3.).contains(&f.radius_multiplier)
-            || self.upper_lake_shore.as_ref().is_some_and(|s| {
-                !(2. ..=24.).contains(&s.shelf_width[0])
-                    || !(s.shelf_width[0]..=32.).contains(&s.shelf_width[1])
-                    || !(12. ..=80.).contains(&s.outer_blend[0])
-                    || !(s.outer_blend[0]..=100.).contains(&s.outer_blend[1])
-                    || !(self.upper_lake.level..=self.upper_lake.level + 2.)
-                        .contains(&s.shelf_level)
-                    || !(0. ..=0.2).contains(&s.shelf_grade)
-                    || !s.phase.is_finite()
+            || [
+                (self.upper_lake_shore.as_ref(), &self.upper_lake),
+                (self.lower_lake_shore.as_ref(), &self.lower_lake),
+            ]
+            .into_iter()
+            .any(|(shore, lake)| {
+                shore.is_some_and(|s| {
+                    !(2. ..=24.).contains(&s.shelf_width[0])
+                        || !(s.shelf_width[0]..=32.).contains(&s.shelf_width[1])
+                        || !(12. ..=80.).contains(&s.outer_blend[0])
+                        || !(s.outer_blend[0]..=100.).contains(&s.outer_blend[1])
+                        || !(lake.level..=lake.level + 2.).contains(&s.shelf_level)
+                        || !(0. ..=0.2).contains(&s.shelf_grade)
+                        || !s.phase.is_finite()
+                        || s.wet_width.is_some() != s.wet_edge_depth.is_some()
+                        || s.wet_width.is_some_and(|width| {
+                            !(12. ..=60.).contains(&width[0])
+                                || !(width[0]..=80.).contains(&width[1])
+                        })
+                        || s.wet_edge_depth
+                            .is_some_and(|depth| !(0.35..=1.).contains(&depth))
+                })
             })
             || self.ordinary_channel_banks.as_ref().is_some_and(|b| {
                 !(0.05..=0.4).contains(&b.max_longitudinal_grade)

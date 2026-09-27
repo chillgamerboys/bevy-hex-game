@@ -199,6 +199,24 @@
     "level": 55,
     "phase": 1.2
   },
+  "lower_lake_shore": {
+    "shelf_width": [
+      12.0,
+      24.0
+    ],
+    "outer_blend": [
+      48.0,
+      88.0
+    ],
+    "shelf_level": 55.0,
+    "shelf_grade": 0.04,
+    "phase": 1.7,
+    "wet_width": [
+      30.0,
+      44.0
+    ],
+    "wet_edge_depth": 0.35
+  },
   "river": {
     "width": 19,
     "points": [
