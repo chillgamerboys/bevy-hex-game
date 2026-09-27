@@ -71,6 +71,8 @@ pub use battle::{
 };
 pub use bot::{BotDebugSnapshot, EscapeTuning};
 pub use bot_config::BotTuning;
+#[cfg(any(test, feature = "test-support"))]
+pub use controller::{ground_motion_contract, GroundMotionContract};
 pub use creatures::{
     ActorId, AttackPhase, AttackSnapshot, AuraSnapshot, BarrierSnapshot, BeamSnapshot,
     BodyHexPrism, CreatureAbility, EncounterSummary, PartyId, PartyPhase, PartySnapshot,

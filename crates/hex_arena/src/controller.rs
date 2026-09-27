@@ -13,6 +13,32 @@ const RUN: f32 = 4.5;
 const STEP_HEIGHT: f32 = 0.4;
 const JUMP_HEIGHT: f32 = 3.25 * 0.4;
 
+/// Effective ground-controller facts for typed movement acceptance tests.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug)]
+pub struct GroundMotionContract {
+    /// Maximum height of an automatic upward step, in world units.
+    pub automatic_step_height: f32,
+    /// Downward acceleration while unsupported, in world units per second squared.
+    pub gravity: f32,
+    /// Contact separation retained by the swept controller, in world units.
+    pub collision_skin: f32,
+    /// Maximum downward distance used to reacquire nearby ground each tick.
+    pub ground_snap_distance: f32,
+}
+
+/// Read the production constants without duplicating physics in a test consumer.
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub const fn ground_motion_contract() -> GroundMotionContract {
+    GroundMotionContract {
+        automatic_step_height: STEP_HEIGHT,
+        gravity: GRAVITY,
+        collision_skin: SKIN,
+        ground_snap_distance: SKIN * 8.0,
+    }
+}
+
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Body {
     pub vertical_velocity: f32,
