@@ -170,7 +170,13 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_dista
     };
     for &[i, j] in &d.ridge_links {
         if let (Some(a), Some(b)) = (d.peaks.get(i), d.peaks.get(j)) {
-            ridge([a[0], a[1], a[2], 170.], [b[0], b[1], b[2], 170.]);
+            // Automatic peak links are lower saddles, as in the approved
+            // coast/reference landform. Interpolating full summit height here
+            // joins unequal peaks into one nearly level curtain wall.
+            ridge(
+                [a[0], a[1], a[2] * 0.72, 170.],
+                [b[0], b[1], b[2] * 0.72, 170.],
+            );
         }
     }
     for path in &d.landform_ridges {
@@ -418,6 +424,102 @@ mod profile_tests {
         let mut without_basin = d.clone();
         without_basin.headland[2] = 0.;
         assert!((mainland(&d, p, 200.) - mainland(&without_basin, p, 200.)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn automatic_peak_links_keep_saddles_below_adjacent_summits() {
+        let g = super::super::tests::compiler(false);
+        let d = g.geography.document.as_ref().expect("geography");
+        let top = |point| {
+            g.column(g.geography.world_hex(point))
+                .0
+                .runs
+                .into_iter()
+                .filter(|run| run.material != "water")
+                .map(|run| run.top)
+                .max()
+                .expect("solid mountain")
+        };
+        for &[i, j] in &d.ridge_links {
+            let a = d.peaks.get(i).expect("admitted peak link");
+            let b = d.peaks.get(j).expect("admitted peak link");
+            let left = top([a[0], a[1]]);
+            let right = top([b[0], b[1]]);
+            let saddle = top([(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5]);
+            assert!(
+                saddle < left.min(right),
+                "automatic ridge {i}->{j} joins summit levels {left}/{right} into a wall at {saddle}"
+            );
+        }
+    }
+
+    #[test]
+    fn mountain_lake_is_screened_from_authored_valley_eyes() {
+        use super::super::{LEVEL_HEIGHT, nearest_hex, world_xz};
+        let g = super::super::tests::compiler(false);
+        let d = g.geography.document.as_ref().expect("geography");
+        let center = g.geography.world_hex(d.upper_lake.center);
+        let water_top = g.geography.top_level(d.upper_lake.level);
+        let mut targets = Vec::new();
+        // Sample actual liquid columns across the basin, including its banks.
+        // These are terrain sight lines, not a claim about native camera feel.
+        for q in -120_i64..=120 {
+            for r in -120_i64..=120 {
+                let p = hex_world_contracts::WorldHex::new(center.q + q, center.r + r);
+                if p.q.rem_euclid(8) != 0
+                    || p.r.rem_euclid(8) != 0
+                    || irregular(
+                        g.geography.model_xz(p),
+                        d.upper_lake.center,
+                        d.upper_lake.radii,
+                        d.upper_lake.phase,
+                    ) >= 1.
+                {
+                    continue;
+                }
+                if g.column(p).1.is_some_and(|water| water.top == water_top) {
+                    targets.push(world_xz(p));
+                }
+            }
+        }
+        assert!(
+            targets.len() > 100,
+            "screening must cover the lake, not one point"
+        );
+        for id in [
+            "grand-valley-tree-bank",
+            "grand-valley-lake-bank",
+            "grand-valley-waterfall-approach",
+        ] {
+            let camera = d.review_cameras.get(id).expect("authored valley eye");
+            let eye_column = g.geography.world_hex([camera.eye[0], camera.eye[2]]);
+            let eye_top = g
+                .column(eye_column)
+                .0
+                .runs
+                .into_iter()
+                .filter(|run| run.material != "water")
+                .map(|run| run.top)
+                .max()
+                .expect("dry bank");
+            let [ex, ez] = world_xz(eye_column);
+            // An eye above the ordinary player's actual eye is conservative.
+            let ey = f64::from(eye_top) * f64::from(LEVEL_HEIGHT) + 1.7;
+            let water_y = f64::from(water_top) * f64::from(LEVEL_HEIGHT);
+            for &[tx, tz] in &targets {
+                let blocked = (1..192_u16).any(|step| {
+                    let t = f64::from(step) / 192.;
+                    let p = nearest_hex(ex + (tx - ex) * t, ez + (tz - ez) * t);
+                    let level = (ey + (water_y - ey) * t) / f64::from(LEVEL_HEIGHT);
+                    g.column(p).0.runs.iter().any(|run| {
+                        run.material != "water"
+                            && f64::from(run.bottom) <= level
+                            && level < f64::from(run.top)
+                    })
+                });
+                assert!(blocked, "lake water exposed from {id} toward [{tx},{tz}]");
+            }
+        }
     }
 
     #[test]
