@@ -18,7 +18,12 @@ repair, then the common mountain supports. Root owns integration, package/export
 this manifest. An independent reviewer challenges source views before the next actual game
 export. L6 (`work/grand-runtime`) only validates the existing default-off far-matte experiment;
 it is independent at dispatch and must demonstrate a visible improvement before integration.
-All Cargo work remains serialized through the shared target lock. No new renderer initiative,
+L6's default-off far-matte experiment is now banked on `work/grand-runtime` at
+`b9a1e30`: nine tests and scoped Clippy passed, but paired actual captures did not
+show enough visual improvement to integrate it. The lane is stopped. L4's continuous
+dry-reach bank repair is integrated at `0eb90ba`; actual-package validation follows
+with the connected mountain envelope. All Cargo work remains serialized through the
+shared target lock. No new renderer initiative,
 decoration expansion or broad acceptance rerun precedes the next meaningful terrain picture.
 
 Latest actual package remains rejected plain04; plain05 has not been compiled. The durable
