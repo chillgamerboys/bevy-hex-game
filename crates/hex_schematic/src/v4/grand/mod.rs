@@ -25,6 +25,8 @@ mod terrain;
 mod terrain_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod upper_study;
 use super::northern::{nearest_hex, world_xz, IslandSpec, NorthernOverview};
 use hex_world_contracts::*;
 use serde::{Deserialize, Serialize};

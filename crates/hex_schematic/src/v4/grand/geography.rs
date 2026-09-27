@@ -22,6 +22,8 @@ pub struct GrandGeographyDocument {
     pub(super) interior_profile: Option<InteriorProfile>,
     #[serde(default)]
     pub(super) mountain_composition: Option<MountainComposition>,
+    #[serde(default)]
+    pub(super) upper_mountain_bodies: Option<UpperMountainBodies>,
     pub(super) massif: [f64; 5],
     pub(super) headland: [f64; 5],
     pub(super) peaks: Vec<[f64; 5]>,
@@ -106,6 +108,15 @@ shape!(MountainComposition {
     peak_rounding_radius: f64,
     phase: f64
 });
+// Absolute sea-relative heights; these bodies do not subtract the apron.
+shape!(UpperMountainBodies {
+    height_transition: [f64; 2],
+    maximum_uplift: f64,
+    edge_blend_fraction: f64,
+    bodies: Vec<UpperMountainBody>
+});
+// Each spine node is [model east, model north, absolute crest height, width].
+shape!(UpperMountainBody {name: String, spine: Vec<[f64; 4]>});
 shape!(Coast {center:[f64;2],radii:[f64;2],phase:f64,coves:Vec<[f64;4]>});
 shape!(Ellipse {
     center: [f64; 2],
@@ -219,6 +230,35 @@ impl GrandGeographyDocument {
                         .is_some_and(|(a, b)| (a[0] - b[0]).hypot(a[2] - b[2]) > 0.01)
                 })
         };
+        if self.upper_mountain_bodies.as_ref().is_some_and(|profile| {
+            !(120. ..=170.).contains(&profile.height_transition[0])
+                || !(profile.height_transition[0] + 30. ..=230.)
+                    .contains(&profile.height_transition[1])
+                || !(0. ..=50.).contains(&profile.maximum_uplift)
+                || !(0.1..=0.4).contains(&profile.edge_blend_fraction)
+                || !bounded(profile.bodies.len(), 1, 3)
+                || profile.bodies.iter().any(|body| {
+                    body.name.is_empty()
+                        || body.name.len() > 64
+                        || !bounded(body.spine.len(), 2, 8)
+                        || body.spine.iter().any(|node| {
+                            !position([node[0], node[1]])
+                                || !(self.upper_lake.level..=360.).contains(&node[2])
+                                || !(40. ..=160.).contains(&node[3])
+                        })
+                        || body.spine.windows(2).any(|nodes| {
+                            nodes
+                                .first()
+                                .zip(nodes.get(1))
+                                .is_none_or(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]) < 1.)
+                        })
+                })
+        }) {
+            return Err(ContractError::new(
+                "grand.upper_mountains",
+                "invalid bounded upper-rock bodies",
+            ));
+        }
         let f = &self.foothills;
         if self.interior_profile.as_ref().is_some_and(|p| {
             !(1. ..=60.).contains(&p.join_width)

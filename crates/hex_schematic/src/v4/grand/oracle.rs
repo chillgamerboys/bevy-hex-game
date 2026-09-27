@@ -226,7 +226,44 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_dista
         .map_or(low + active_core, |profile| {
             composed_relief(low, active_core, profile.join_width)
         });
-    finish_terrain(d, [x, z], height)
+    finish_terrain(d, [x, z], upper_mountain_bodies(d, [x, z], height))
+}
+
+/// Reshape only the existing upper rock. Lower terrain remains bit-identical.
+/// Individual shoulder sections have rounded tops and zero-slope outer ends;
+/// their max union deliberately retains unequal ridge lines and saddles.
+fn upper_mountain_bodies(d: &GrandGeographyDocument, point: [f64; 2], old: f64) -> f64 {
+    let Some(profile) = &d.upper_mountain_bodies else {
+        return old;
+    };
+    let [lower, upper] = profile.height_transition;
+    if old <= lower {
+        return old;
+    }
+    let mut replacement = lower;
+    let mut influence: f64 = 0.;
+    for body in &profile.bodies {
+        for nodes in body.spine.windows(2) {
+            let (Some(a), Some(b)) = (nodes.first(), nodes.get(1)) else {
+                continue;
+            };
+            let (distance, t) = segment(point, [a[0], a[1]], [b[0], b[1]]);
+            // Smoother interpolation makes authored secondary crests distinct;
+            // it does not connect every peak at the highest summit height.
+            let along = smooth(t);
+            let crest = a[2] * (1. - along) + b[2] * along;
+            let width = a[3] * (1. - along) + b[3] * along;
+            let radius = distance / width;
+            if radius >= 1. {
+                continue;
+            }
+            let shape = (1. - radius * radius).powi(2);
+            replacement = replacement.max(lower + (crest - lower) * shape);
+            influence = influence.max(smooth((1. - radius) / profile.edge_blend_fraction));
+        }
+    }
+    let weight = smooth((old - lower) / (upper - lower)) * influence;
+    old + (replacement - old).min(profile.maximum_uplift) * weight
 }
 
 /// Round the upper body while retaining the established outer radial profile.
@@ -707,6 +744,42 @@ mod profile_tests {
             "../../../../../assets/config/v4/grand-v4/geography-r02.json"
         ))
         .expect("canonical geography")
+    }
+
+    #[test]
+    fn upper_mountain_bodies_preserve_lower_ground_and_absolute_height_units() {
+        let d = document();
+        let Some(profile) = &d.upper_mountain_bodies else {
+            return;
+        };
+        for body in &profile.bodies {
+            for node in &body.spine {
+                for old in [-20., 0., 70., 120., profile.height_transition[0]] {
+                    assert_eq!(
+                        upper_mountain_bodies(&d, [node[0], node[1]], old).to_bits(),
+                        old.to_bits()
+                    );
+                }
+            }
+        }
+        for x in (-100..=850).step_by(10) {
+            for z in (300..=1050).step_by(10) {
+                let point = [f64::from(x), f64::from(z)];
+                let old = 175.;
+                assert!(upper_mountain_bodies(&d, point, old) <= old + profile.maximum_uplift);
+            }
+        }
+        let peak = profile
+            .bodies
+            .iter()
+            .flat_map(|body| &body.spine)
+            .max_by(|a, b| a[2].total_cmp(&b[2]))
+            .expect("bounded nonempty upper bodies");
+        let actual = upper_mountain_bodies(&d, [peak[0], peak[1]], peak[2] + 70.);
+        assert!(
+            (actual - peak[2]).abs() < 1e-9,
+            "upper crest must be sea-relative, without subtracting the110m apron: {actual}"
+        );
     }
 
     #[test]
