@@ -470,7 +470,11 @@ fn forest_detail(
     Ok((!overlaps(occupied, &object.occupancy)).then_some(object))
 }
 
-fn shrine(g: &GrandCompiler, id: &str) -> Result<ObjectInstance, ContractError> {
+fn shrine(
+    g: &GrandCompiler,
+    id: &str,
+    occupied: &Occupied,
+) -> Result<ObjectInstance, ContractError> {
     let frame = g.geography.frame(&format!("shrine_{id}"))?;
     let root = frame.hex([0., 0.]);
     let entrance = frame.hex([0., -10.]);
@@ -508,6 +512,14 @@ fn shrine(g: &GrandCompiler, id: &str) -> Result<ObjectInstance, ContractError> 
         let Some(roof) = piers.iter().map(|(_, floor)| floor + 18).max() else {
             continue;
         };
+        piers.retain(|(p, floor)| {
+            occupied
+                .get(p)
+                .is_none_or(|runs| runs.iter().all(|(lo, hi)| *lo >= roof || *hi <= *floor))
+        });
+        if piers.len() < 3 {
+            continue;
+        }
         let mut cells = Cells::new();
         for (p, floor) in piers {
             add(
@@ -520,10 +532,15 @@ fn shrine(g: &GrandCompiler, id: &str) -> Result<ObjectInstance, ContractError> 
         }
         for q in -radius - 1..=radius + 1 {
             for r in -radius - 1..=radius + 1 {
-                if q.abs().max(r.abs()).max((q + r).abs()) == radius + 1 {
+                let p = WorldHex::new(root.q + q, root.r + r);
+                if q.abs().max(r.abs()).max((q + r).abs()) == radius + 1
+                    && occupied.get(&p).is_none_or(|runs| {
+                        runs.iter().all(|(lo, hi)| *lo >= roof + 2 || *hi <= roof)
+                    })
+                {
                     add(
                         &mut cells,
-                        WorldHex::new(root.q + q, root.r + r),
+                        p,
                         roof,
                         roof + 2,
                         if id == "plant" { "moss" } else { "stone" },
@@ -562,9 +579,6 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
     for (i, root) in coastal_roots(g).into_iter().enumerate() {
         out.push(coastal_rock(g, i, root)?);
     }
-    for id in ["water", "air", "earth", "plant", "fire"] {
-        out.push(shrine(g, id)?);
-    }
     // Giant central crystal, with an accessible shrine on its eastern shoulder.
     let frame = g.geography.frame("crystal_heart")?;
     let root = frame.hex([0., 0.]);
@@ -592,6 +606,17 @@ pub(super) fn compose(g: &GrandCompiler) -> Result<Vec<ObjectInstance>, Contract
         root,
         cells,
     )?);
+    // Sculptures have priority over their architectural frame. This prevents
+    // stone piers replacing flame/crystal/foliage voxels in the same column.
+    let mut occupied = Occupied::new();
+    for landmark in &out {
+        reserve(&mut occupied, landmark);
+    }
+    for id in ["water", "air", "earth", "plant", "fire"] {
+        let colonnade = shrine(g, id, &occupied)?;
+        reserve(&mut occupied, &colonnade);
+        out.push(colonnade);
+    }
     // The approved lake-side composition uses the existing small camps and
     // clearings. A fort enclosure would obstruct the shared root-temple approach.
     let landmarks = landmarks::compose(g, &out)?;
@@ -1006,7 +1031,7 @@ mod forest_tests {
             }
         }
         for id in ["water", "air", "earth", "plant", "fire"] {
-            let colonnade = shrine(g, id).expect("grounded shrine perimeter");
+            let colonnade = shrine(g, id, &Occupied::new()).expect("grounded shrine perimeter");
             assert!(
                 colonnade.grounding.as_ref().expect("piers").len() >= 3,
                 "{id}"

@@ -455,7 +455,8 @@ mod tests {
     #[test]
     fn courtyard_and_library_are_supported_and_preserve_exact_water_and_passages() {
         let plain = test_compiler(false);
-        let water_shrine = shrine(&plain, "water").expect("existing Water Shrine fixture");
+        let water_shrine =
+            shrine(&plain, "water", &Occupied::new()).expect("existing Water Shrine fixture");
         let additions = compose(&plain, &[water_shrine]).expect("bounded architecture");
         assert_eq!(additions.len(), 16);
         let mut occupied = Occupied::new();
