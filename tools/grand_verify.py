@@ -361,6 +361,38 @@ def execute_walking_bundle(binary: Path, output: Path, environment: dict[str, st
         raise RuntimeError("; ".join(failures))
 
 
+def validate_sailing_course(measurement: dict, start_anchor: str) -> None:
+    """Require the published bay course and its actual wet waypoint arrival."""
+    via = ["sailing_bay_offshore"] if start_anchor == "sailing_start_bay" else []
+    course = measurement.get("authored_course", [])
+    arrivals = measurement.get("course_waypoint_arrivals", [])
+    if ([point.get("anchor") for point in course] != [start_anchor, *via, "volcano_berth"]
+            or [arrival.get("anchor") for arrival in arrivals] != via
+            or not math.isclose(measurement.get("course_waypoint_radius", -1), 8.0)):
+        raise RuntimeError("Sailing did not follow its declared offshore course")
+    positions = [point.get("position") for point in course]
+    if any(not isinstance(p, list) or len(p) != 3
+           or any(not isinstance(v, (int, float)) or not math.isfinite(v) for v in p)
+           for p in positions):
+        raise RuntimeError("Sailing course has invalid world positions")
+    if positions[0] != measurement.get("authored_start") or positions[-1] != measurement.get("authored_target"):
+        raise RuntimeError("Sailing course changed its authored start or berth")
+    length = sum(math.hypot(a[0] - b[0], a[2] - b[2]) for a, b in zip(positions, positions[1:]))
+    if not math.isclose(measurement.get("authored_course_horizontal_distance", -1), length, abs_tol=0.001):
+        raise RuntimeError("Sailing course distance disagrees with its world positions")
+    for arrival, target in zip(arrivals, positions[1:-1]):
+        feet = arrival.get("feet", [])
+        if (arrival.get("target") != target or len(feet) != 3
+                or any(not isinstance(v, (int, float)) or not math.isfinite(v) for v in feet)
+                or arrival.get("tick", 0) <= 0
+                or any(arrival.get(key) is not True for key in
+                       ("boat_active", "target_ready_wet", "arrival_ready_wet"))):
+            raise RuntimeError("Offshore waypoint has no valid loaded boat arrival")
+        remaining = math.hypot(feet[0] - target[0], feet[2] - target[2])
+        if remaining > 8.0 or not math.isclose(arrival.get("remaining", -1), remaining, abs_tol=0.001):
+            raise RuntimeError("Boat did not reach its offshore course waypoint")
+
+
 def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[str, str],
                       *, sailing_start: str = "sailing_start") -> dict:
     if sailing_start not in ("sailing_start", "sailing_start_bay"):
@@ -383,7 +415,7 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
     if result.returncode or "running 1 test" not in log_path.read_text():
         raise RuntimeError(f"Actual {mode} failed or did not execute; see {log_path}")
     receipt = json.loads((data / f"{mode}.json").read_text())
-    kind = {"walking":"grand-ordinary-walking-r04", "sailing":"grand-authored-sailing-v2",
+    kind = {"walking":"grand-ordinary-walking-r04", "sailing":"grand-authored-sailing-v3",
             "crossing":"grand-mixed-water-crossing-v1"}[mode]
     if receipt.get("kind") != kind or receipt.get("status") != "PASS":
         raise RuntimeError(f"Actual {mode} receipt did not report completion")
@@ -395,6 +427,7 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
         validate_crossing_receipt(receipt)
     else:
         measurement = receipt.get("measurement", {})
+        validate_sailing_course(measurement, sailing_start)
         shore = measurement.get("shore_arrival") or {}
         berth = measurement.get("berth_water") or {}
         if (measurement.get("unupgraded") is not True or measurement.get("status") != "PASS"

@@ -117,8 +117,11 @@ integrity. The restart clock fixture also covers a run longer than sixty hours.
 `--walking` exercises the current authored routes and independent broad-area probes through the real controller,
 including independent forest crossings, riverbank escapes, and published stacked mountain/cave connections. It requires completed simulation ticks and clear supported endpoints.
 `--sailing` measures western-shore and starting-bay departures separately with one
-ordinary B input, the same live wind and unupgraded boat physics. The bay is farther
-away. The sailing clock ends at the wet `volcano_berth`; a separate required leg
+ordinary B input, the same live wind and unupgraded boat physics. Bay departure
+first follows the world-published `sailing_bay_offshore` waypoint around the
+headland; its receipt records the loaded wet arrival and full authored course
+length separately from the straight-line distance. Western departure remains
+direct. The sailing clock ends at the wet `volcano_berth`; a separate required leg
 uses one B press to disembark, then ordinary swimming and walking to the unchanged
 dry `volcano_landing`. That leg must settle for forty consecutive simulation ticks
 at the correct height with clear body space and valid support. Both reported

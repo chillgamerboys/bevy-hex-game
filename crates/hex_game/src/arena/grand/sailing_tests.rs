@@ -228,15 +228,41 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
             .get("volcano_landing")
             .ok_or("volcano_landing missing")?,
     );
-    // The bay is intentionally farther away. Its previous 120-second run was
-    // still sailing normally with 97 units remaining; the western bound stays
-    // unchanged. Neither deadline is a tolerance on the 45-second design target.
+    // Leave the bay through its authored offshore mouth before turning west.
+    // A direct bearing to the berth cuts across the intervening headland.
+    let mut pending_waypoint = if start_anchor == "sailing_start_bay" {
+        Some(Vec3::from_array(
+            *overview
+                .anchors
+                .get("sailing_bay_offshore")
+                .ok_or("sailing_bay_offshore missing")?,
+        ))
+    } else {
+        None
+    };
+    let mut course = vec![(start_anchor.as_str(), start)];
+    if let Some(waypoint) = pending_waypoint {
+        course.push(("sailing_bay_offshore", waypoint));
+    }
+    course.push(("volcano_berth", target));
+    let course_distance: f32 = course
+        .iter()
+        .zip(course.iter().skip(1))
+        .map(|((_, a), (_, b))| a.with_y(0.0).distance(b.with_y(0.0)))
+        .sum();
+    // The offshore bend has a separately checked 45-unit wet maneuvering pocket.
+    // This only advances the steering target; hull rotation remains ordinary.
+    let waypoint_radius = 8.0;
+    let mut waypoint_arrivals = Vec::new();
+    // Neither completion bound is a tolerance on the 45-second western target.
     let simulation_limit = if start_anchor == "sailing_start_bay" {
         BAY_SIMULATION_LIMIT_SECONDS
     } else {
         WESTERN_SIMULATION_LIMIT_SECONDS
     };
-    let direction = (target - start).with_y(0.0).normalize_or_zero();
+    let direction = (pending_waypoint.unwrap_or(target) - start)
+        .with_y(0.0)
+        .normalize_or_zero();
     let identity = app
         .world()
         .resource::<ArenaTerrainView>()
@@ -321,7 +347,31 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
         let tick = app.world().resource::<ArenaSession>().tick;
         let actor = player(app.world())?;
         let remaining = actor.feet.with_y(0.0).distance(target.with_y(0.0));
-        if deployment_tick.is_some() && remaining <= ARRIVAL_RADIUS {
+        if let Some(waypoint) = pending_waypoint {
+            let waypoint_remaining = actor.feet.with_y(0.0).distance(waypoint.with_y(0.0));
+            if deployment_tick.is_some() && waypoint_remaining <= waypoint_radius {
+                if !matches!(
+                    surface(app.world(), waypoint),
+                    OceanSurfaceState::ReadyWet(_)
+                ) || !matches!(
+                    surface(app.world(), actor.feet),
+                    OceanSurfaceState::ReadyWet(_)
+                ) || !actor.boat().is_some_and(|boat| boat.active)
+                {
+                    failure =
+                        Some("offshore course waypoint is not a loaded wet boat arrival".into());
+                    break;
+                }
+                waypoint_arrivals.push(serde_json::json!({
+                    "anchor":"sailing_bay_offshore","target":waypoint.to_array(),
+                    "feet":actor.feet.to_array(),"remaining":waypoint_remaining,
+                    "tick":tick,"target_ready_wet":true,"arrival_ready_wet":true,
+                    "boat_active":true,
+                }));
+                pending_waypoint = None;
+            }
+        }
+        if deployment_tick.is_some() && pending_waypoint.is_none() && remaining <= ARRIVAL_RADIUS {
             break;
         }
         let elapsed = app.world().resource::<ArenaSession>().ocean_time().seconds - first_seconds;
@@ -334,7 +384,7 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
             failure = Some(error);
             break;
         }
-        steer(app, window, target)?;
+        steer(app, window, pending_waypoint.unwrap_or(target))?;
         let frame_started = Instant::now();
         app.update();
         frames += 1;
@@ -487,6 +537,9 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
         "launch":launch.to_array(),"end":arrival_feet.to_array(),"arrival_radius":ARRIVAL_RADIUS,"remaining":remaining,
         "target_surface":format!("{:?}",surface(app.world(),target)),
         "authored_horizontal_distance":start.with_y(0.0).distance(target.with_y(0.0)),"traveled_horizontal_distance":distance,
+        "authored_course":course.iter().map(|(anchor, position)|serde_json::json!({"anchor":anchor,"position":position.to_array()})).collect::<Vec<_>>(),
+        "authored_course_horizontal_distance":course_distance,
+        "course_waypoint_radius":waypoint_radius,"course_waypoint_arrivals":waypoint_arrivals,
         "simulation_ticks":arrival_tick-first_tick,"elapsed_simulation_seconds":elapsed,
         "session_clock_start":first_seconds,"session_clock_end":arrival_seconds,
         "environment_clock_start":first_environment_seconds,"environment_clock_end":arrival_environment_seconds,
@@ -550,8 +603,8 @@ fn actual_grand_unupgraded_authored_sailing() {
         .and_then(serde_json::Value::as_str)
         == Some("PASS");
     let receipt = serde_json::json!({
-        "kind":"grand-authored-sailing-v2","status":if passed{"PASS"}else{"FAIL"},"package":package,
-        "scope":"Actual package, live ocean, shared 9-unit prevailing wind, production keyboard/cursor input, drive_simulation and ArenaTick. Sailing time ends at the authored wet berth; a separate required single-B disembark and swimming/walking leg reaches the unchanged dry volcano landing. One authored-start setup relocation only; no route relocation, velocity injection, upgrades, terrain edits or tuning changes. AI decisions disabled by shared fixture. This proves controller travel, not native control feel or visual orientation.",
+        "kind":"grand-authored-sailing-v3","status":if passed{"PASS"}else{"FAIL"},"package":package,
+        "scope":"Actual package, live ocean, shared 9-unit prevailing wind, production keyboard/cursor input, drive_simulation and ArenaTick. Bay departure follows its world-published offshore waypoint; western departure remains direct. Sailing time ends at the authored wet berth; a separate required single-B disembark and swimming/walking leg reaches the unchanged dry volcano landing. One authored-start setup relocation only; no route relocation, velocity injection, upgrades, terrain edits or tuning changes. AI decisions disabled by shared fixture. This proves controller travel, not native control feel or visual orientation.",
         "measurement":measurement,
     });
     std::fs::write(
