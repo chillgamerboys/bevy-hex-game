@@ -156,9 +156,11 @@ const BAYS: &[Bay] = &[
         along_x: true,
         frame: "library_lower",
     },
+    // The south-east diagonal is the real staircase entrance. This bay
+    // belongs on the free north-west wall so both piers retain their feet.
     Bay {
-        x: 33.,
-        z: -39.,
+        x: -42.,
+        z: 33.,
         along_x: true,
         frame: "library_lower",
     },
@@ -422,19 +424,16 @@ mod tests {
             .collect();
         assert_eq!(camps.len(), 6);
         for camp in camps {
-            assert!(
-                camp.occupancy
-                    .iter()
-                    .flat_map(|c| &c.runs)
-                    .any(|run| run.material == "timber")
-            );
-            assert!(
-                !camp
-                    .grounding
-                    .as_ref()
-                    .expect("hut and clearing contacts")
-                    .is_empty()
-            );
+            assert!(camp
+                .occupancy
+                .iter()
+                .flat_map(|c| &c.runs)
+                .any(|run| run.material == "timber"));
+            assert!(!camp
+                .grounding
+                .as_ref()
+                .expect("hut and clearing contacts")
+                .is_empty());
         }
         let rim = objects
             .iter()

@@ -625,34 +625,70 @@ fn root_temple_ribs(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> 
 fn marker_base(
     g: &GrandCompiler,
     frame: &LandmarkFrame,
-    local: [f64; 2],
-) -> Result<(Cells, i32), ContractError> {
-    let root = frame.hex(local);
-    let floor = g.support_at(frame, local)?.level + 1;
-    let mut cells = Cells::new();
-    for q in -2_i64..=2 {
-        for r in -2_i64..=2 {
-            if q.abs().max(r.abs()).max((q + r).abs()) <= 2 {
+) -> Result<(WorldHex, Cells, i32), ContractError> {
+    // These small, authored alternatives stay near the claim point. A route
+    // terminal may occupy the old rear position, so choose a complete supported
+    // pedestal before composing the sculpture rather than clipping off its feet.
+    for local in [
+        [0., 6.],
+        [18., 0.],
+        [-18., 0.],
+        [0., -18.],
+        [0., 18.],
+        [26., 0.],
+        [-26., 0.],
+        [0., -26.],
+        [0., 26.],
+    ] {
+        let root = frame.hex(local);
+        let mut supports = Vec::new();
+        for q in -2_i64..=2 {
+            for r in -2_i64..=2 {
+                if q.abs().max(r.abs()).max((q + r).abs()) > 2 {
+                    continue;
+                }
                 let p = WorldHex::new(root.q + q, root.r + r);
-                add(
-                    &mut cells,
-                    p,
-                    g.support_at(frame, frame.local(p))?.level + 1,
-                    floor + 2,
-                    "stone",
-                );
+                if let Ok(support) = g.support_at(frame, frame.local(p)) {
+                    supports.push((p, support.level + 1));
+                }
             }
         }
+        if supports.len() != 19 {
+            continue;
+        }
+        let Some(floor) = supports.iter().map(|(_, floor)| *floor).max() else {
+            continue;
+        };
+        if supports.iter().any(|(p, bottom)| {
+            g.reserved_interval(*p, *bottom, floor + 16)
+                || g.column(*p)
+                    .0
+                    .runs
+                    .iter()
+                    .any(|run| run.bottom < floor + 16 && run.top > *bottom)
+        }) {
+            continue;
+        }
+        let mut cells = Cells::new();
+        for (p, bottom) in supports {
+            add(&mut cells, p, bottom, floor + 2, "stone");
+        }
+        return Ok((root, cells, floor));
     }
-    Ok((cells, floor))
+    Err(ContractError::new(
+        "grand.shrine_marker",
+        format!(
+            "no supported unreserved local pedestal around {:?}",
+            frame.hex([0., 0.])
+        ),
+    ))
 }
 
 fn fire_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
     // A static flame-shaped sculpture behind the claim point. Its opaque warm
     // masonry has ordinary solid behavior; it is not an active fire or hazard.
     let frame = g.geography.frame("shrine_fire")?;
-    let root = frame.hex([0., 6.]);
-    let (mut cells, floor) = marker_base(g, &frame, [0., 6.])?;
+    let (root, mut cells, floor) = marker_base(g, &frame)?;
     for q in -1_i64..=1 {
         for r in -1_i64..=1 {
             if q.abs().max(r.abs()).max((q + r).abs()) <= 1 {
@@ -696,8 +732,7 @@ fn air_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
     // A grounded, pale spiral around a blue center, behind the claim point.
     // This is bounded static art rather than a wind simulation or new ability.
     let frame = g.geography.frame("shrine_air")?;
-    let root = frame.hex([0., 6.]);
-    let (mut cells, floor) = marker_base(g, &frame, [0., 6.])?;
+    let (root, mut cells, floor) = marker_base(g, &frame)?;
     add(&mut cells, root, floor + 2, floor + 16, "crystal");
     for (step, &(q, r)) in DIRS.iter().cycle().take(12).enumerate() {
         let bottom = floor + 2 + step as i32;
@@ -720,8 +755,7 @@ fn air_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
 
 fn earth_marker(g: &GrandCompiler) -> Result<ObjectInstance, ContractError> {
     let frame = g.geography.frame("shrine_earth")?;
-    let root = frame.hex([0., 6.]);
-    let (mut cells, floor) = marker_base(g, &frame, [0., 6.])?;
+    let (root, mut cells, floor) = marker_base(g, &frame)?;
     for q in -2_i64..=2 {
         for r in -2_i64..=2 {
             let distance = q.abs().max(r.abs()).max((q + r).abs());
