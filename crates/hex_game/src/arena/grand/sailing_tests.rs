@@ -1,4 +1,6 @@
 //! Opt-in measurement of the authored Grand crossing through normal input and physics.
+#[path = "sailing_tests/landing.rs"]
+mod landing;
 use super::*;
 use bevy::{
     input::mouse::{MouseButtonInput, MouseWheel},
@@ -8,7 +10,8 @@ use hex_core::{ocean::OceanSurfaceState, ocean::OceanWaterColumn, HexCoord};
 use hex_map::v4::ResidentChunk;
 
 const ARRIVAL_RADIUS: f32 = 2.0;
-const SIMULATION_LIMIT_SECONDS: f64 = 120.0;
+const WESTERN_SIMULATION_LIMIT_SECONDS: f64 = 120.0;
+const BAY_SIMULATION_LIMIT_SECONDS: f64 = 180.0;
 const WALL_LIMIT: Duration = Duration::from_secs(300);
 
 #[derive(Default, Serialize)]
@@ -216,9 +219,23 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
     let target = Vec3::from_array(
         *overview
             .anchors
+            .get("volcano_berth")
+            .ok_or("volcano_berth missing")?,
+    );
+    let landing = Vec3::from_array(
+        *overview
+            .anchors
             .get("volcano_landing")
             .ok_or("volcano_landing missing")?,
     );
+    // The bay is intentionally farther away. Its previous 120-second run was
+    // still sailing normally with 97 units remaining; the western bound stays
+    // unchanged. Neither deadline is a tolerance on the 45-second design target.
+    let simulation_limit = if start_anchor == "sailing_start_bay" {
+        BAY_SIMULATION_LIMIT_SECONDS
+    } else {
+        WESTERN_SIMULATION_LIMIT_SECONDS
+    };
     let direction = (target - start).with_y(0.0).normalize_or_zero();
     let identity = app
         .world()
@@ -308,7 +325,7 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
             break;
         }
         let elapsed = app.world().resource::<ArenaSession>().ocean_time().seconds - first_seconds;
-        if elapsed >= SIMULATION_LIMIT_SECONDS || Instant::now() >= deadline {
+        if elapsed >= simulation_limit || Instant::now() >= deadline {
             failure = Some("crossing exceeded bounded simulation or wall-clock deadline".into());
             break;
         }
@@ -404,12 +421,52 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
     let arrival_feet = player(app.world())?.feet;
     let arrival_boat = player(app.world())?.boat();
     let crossing_wall_seconds = began.elapsed().as_secs_f64();
+    let berth_water = if failure.is_none() {
+        match (
+            surface(app.world(), target),
+            surface(app.world(), arrival_feet),
+        ) {
+            (OceanSurfaceState::ReadyWet(berth), OceanSurfaceState::ReadyWet(arrival)) => {
+                Some(serde_json::json!({
+                    "target_ready_wet":true,"arrival_ready_wet":true,
+                    "target_water_height":berth.height,"target_bed_height":berth.bed_height,
+                    "arrival_water_height":arrival.height,"arrival_bed_height":arrival.bed_height,
+                }))
+            }
+            _ => {
+                failure =
+                    Some("sailing arrival and authored berth must both be loaded wet water".into());
+                None
+            }
+        }
+    } else {
+        None
+    };
     let endpoint_probe = if failure.is_none() {
         match endpoint_liveness(app, &mut peaks) {
             Ok(probe) => Some(probe),
             Err(error) => {
                 failure = Some(error);
                 None
+            }
+        }
+    } else {
+        None
+    };
+    let shore_arrival = if failure.is_none() {
+        match landing::disembark(app, window, landing, &mut peaks) {
+            Ok(probe) => Some(probe),
+            Err(error) => {
+                failure = Some(error.clone());
+                let actor = player(app.world())?;
+                Some(serde_json::json!({
+                    "status":"FAIL","error":error,"target":landing.to_array(),
+                    "feet":actor.feet.to_array(),"grounded":actor.grounded,
+                    "boat":actor.boat(),"swimming":actor.swimming(),
+                    "solid_body_clear":app.world().resource::<ArenaSession>().actor_solid_volume_valid(0),
+                    "surface":format!("{:?}",surface(app.world(),actor.feet)),
+                    "tick":app.world().resource::<ArenaSession>().tick,
+                }))
             }
         }
     } else {
@@ -423,6 +480,8 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
     let summary = serde_json::json!({
         "status":if failure.is_none(){"PASS"}else{"FAIL"},"error":failure,
         "start_anchor":start_anchor,
+        "target_anchor":"volcano_berth","landing_anchor":"volcano_landing",
+        "simulation_limit_seconds":simulation_limit,
         "identity":identity,"authored_start":start.to_array(),"authored_target":target.to_array(),
         "prepared_launch":prepared_launch.to_array(),"idle_readiness_ticks":idle_completed_ticks,"first_b_frame":first_b_frame,
         "launch":launch.to_array(),"end":arrival_feet.to_array(),"arrival_radius":ARRIVAL_RADIUS,"remaining":remaining,
@@ -438,6 +497,8 @@ fn measure(app: &mut App) -> Result<serde_json::Value, String> {
     });
     let diagnostics = serde_json::json!({
         "setup_wall_seconds":setup_wall_seconds,"crossing_wall_seconds":crossing_wall_seconds,"endpoint_liveness_probe":endpoint_probe,
+        "shore_arrival":shore_arrival,
+        "berth_water":berth_water,
         "frames":frames,"unchanged_tick_frames":unchanged_tick_frames,"unchanged_tick_wall_seconds":unchanged_tick_wall_seconds,
         "stationary_boat_ticks":stationary_boat_ticks,"departure":departure,"end_boat":arrival_boat,
         "wind_speed_min":wind_min.is_finite().then_some(wind_min),"wind_speed_max":wind_max,
@@ -489,8 +550,8 @@ fn actual_grand_unupgraded_authored_sailing() {
         .and_then(serde_json::Value::as_str)
         == Some("PASS");
     let receipt = serde_json::json!({
-        "kind":"grand-authored-sailing-v1","status":if passed{"PASS"}else{"FAIL"},"package":package,
-        "scope":"Actual package, live ocean, shared 9-unit prevailing wind, production keyboard/cursor input, drive_simulation and ArenaTick. One authored-start setup relocation only; no route relocation, velocity injection, upgrades, terrain edits or tuning changes. AI decisions disabled by shared fixture. This proves controller travel, not native control feel or visual orientation.",
+        "kind":"grand-authored-sailing-v2","status":if passed{"PASS"}else{"FAIL"},"package":package,
+        "scope":"Actual package, live ocean, shared 9-unit prevailing wind, production keyboard/cursor input, drive_simulation and ArenaTick. Sailing time ends at the authored wet berth; a separate required single-B disembark and swimming/walking leg reaches the unchanged dry volcano landing. One authored-start setup relocation only; no route relocation, velocity injection, upgrades, terrain edits or tuning changes. AI decisions disabled by shared fixture. This proves controller travel, not native control feel or visual orientation.",
         "measurement":measurement,
     });
     std::fs::write(

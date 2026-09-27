@@ -118,7 +118,11 @@ integrity. The restart clock fixture also covers a run longer than sixty hours.
 including independent forest crossings, riverbank escapes, and published stacked mountain/cave connections. It requires completed simulation ticks and clear supported endpoints.
 `--sailing` measures western-shore and starting-bay departures separately with one
 ordinary B input, the same live wind and unupgraded boat physics. The bay is farther
-away. Both reported times are measurements; neither is an assumed 45-second pass.
+away. The sailing clock ends at the wet `volcano_berth`; a separate required leg
+uses one B press to disembark, then ordinary swimming and walking to the unchanged
+dry `volcano_landing`. That leg must settle for forty consecutive simulation ticks
+at the correct height with clear body space and valid support. Both reported
+sailing times are measurements; neither is an assumed 45-second pass.
 
 The 47-view capture matrix is windowless and requires a clean committed candidate
 and a package whose authoring signature matches current source. A `--view` subset

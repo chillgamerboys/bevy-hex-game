@@ -383,7 +383,7 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
     if result.returncode or "running 1 test" not in log_path.read_text():
         raise RuntimeError(f"Actual {mode} failed or did not execute; see {log_path}")
     receipt = json.loads((data / f"{mode}.json").read_text())
-    kind = {"walking":"grand-ordinary-walking-r04", "sailing":"grand-authored-sailing-v1",
+    kind = {"walking":"grand-ordinary-walking-r04", "sailing":"grand-authored-sailing-v2",
             "crossing":"grand-mixed-water-crossing-v1"}[mode]
     if receipt.get("kind") != kind or receipt.get("status") != "PASS":
         raise RuntimeError(f"Actual {mode} receipt did not report completion")
@@ -395,12 +395,30 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
         validate_crossing_receipt(receipt)
     else:
         measurement = receipt.get("measurement", {})
+        shore = measurement.get("shore_arrival") or {}
+        berth = measurement.get("berth_water") or {}
         if (measurement.get("unupgraded") is not True or measurement.get("status") != "PASS"
                 or measurement.get("start_anchor") != sailing_start
+                or measurement.get("target_anchor") != "volcano_berth"
+                or measurement.get("landing_anchor") != "volcano_landing"
+                or berth.get("target_ready_wet") is not True
+                or berth.get("arrival_ready_wet") is not True
                 or measurement.get("simulation_ticks", 0) <= 0
                 or not measurement.get("endpoint_liveness_probe")
-                or measurement.get("remaining", math.inf) > measurement.get("arrival_radius", 0)):
-            raise RuntimeError("Sailing did not complete the unupgraded live crossing")
+                or measurement.get("remaining", math.inf) > measurement.get("arrival_radius", 0)
+                or shore.get("status") != "PASS" or shore.get("simulation_ticks", 0) <= 40
+                or shore.get("settling_ticks", 0) < 40 or shore.get("remaining", math.inf) > 2.0
+                or not math.isclose(shore.get("vertical_tolerance", -1),
+                                    shore.get("voxel_height", -1) + 0.001, rel_tol=1e-6)
+                or shore.get("voxel_height", 0) <= 0
+                or shore.get("vertical_error", math.inf) > shore.get("vertical_tolerance", 0)
+                or shore.get("boat_active") is not False
+                or any(shore.get(key) is not True for key in ("grounded", "support_valid",
+                    "solid_body_clear", "all_observed_terrain_ready", "swimming_observed"))
+                or not isinstance(shore.get("first_b_frame"), dict)
+                or ((shore["first_b_frame"].get("boat_active") is not False)
+                    and shore["first_b_frame"].get("pending_input_edge") is not True)):
+            raise RuntimeError("Sailing must reach its wet berth and disembark onto the original dry landing")
     return receipt
 
 
