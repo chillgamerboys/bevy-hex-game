@@ -1,6 +1,6 @@
 //! Continuous approved landforms, sampled at production hex resolution.
 //! No 12-unit study-grid stair steps enter the playable terrain.
-use super::geography::{ellipse, irregular, route_distance, segment, GrandGeographyDocument};
+use super::geography::{GrandGeographyDocument, ellipse, irregular, route_distance, segment};
 fn clamp(x: f64) -> f64 {
     x.clamp(0., 1.)
 }
@@ -562,25 +562,24 @@ fn finish_terrain_profiled(
                 }
             }
         }
-        if profiles {
-            if d.ordinary_channel_banks
+        if profiles
+            && d.ordinary_channel_banks
                 .as_ref()
                 .and_then(|b| b.dry_reach_support.as_ref())
                 .is_some()
+        {
+            // Water/bed authority stays exact. The dry bank uses complete
+            // continuous reach fields, not a blend carrying the old
+            // nearest-owner height through a second dry transition.
+            if dist >= half
+                && pre_channel_ground >= 0.
+                && ![&d.upper_lake, &d.lower_lake]
+                    .into_iter()
+                    .any(|lake| irregular([x, z], lake.center, lake.radii, lake.phase) < 1.)
             {
-                // Water/bed authority stays exact. The dry bank uses complete
-                // continuous reach fields, not a blend carrying the old
-                // nearest-owner height through a second dry transition.
-                if dist >= half
-                    && pre_channel_ground >= 0.
-                    && ![&d.upper_lake, &d.lower_lake]
-                        .into_iter()
-                        .any(|lake| irregular([x, z], lake.center, lake.radii, lake.phase) < 1.)
-                {
-                    h = dry_reach_support(d, [x, z], channel, pre_channel_ground);
-                    if let Some(level) = required_water {
-                        h = h.max(level);
-                    }
+                h = dry_reach_support(d, [x, z], channel, pre_channel_ground);
+                if let Some(level) = required_water {
+                    h = h.max(level);
                 }
             }
         }
@@ -855,7 +854,7 @@ mod profile_tests {
             );
             for axis in 0..2 {
                 let mut adjacent = point;
-                adjacent[axis] += 1e-6;
+                *adjacent.get_mut(axis).expect("2D coordinate") += 1e-6;
                 assert!((height - dry_reach_support(&d, adjacent, &d.falls, 45.)).abs() < 1e-4);
             }
         }
@@ -1093,7 +1092,7 @@ mod profile_tests {
     #[test]
     #[ignore = "explicit exact-source shape study; emits sections, not a traversal verdict"]
     fn report_mountain_composition_sections() {
-        use super::super::{grid_value, GrandCompiler, GrandSpec};
+        use super::super::{GrandCompiler, GrandSpec, grid_value};
         let candidate = document();
         assert!(candidate.mountain_composition.is_some());
         let mut baseline = candidate.clone();
@@ -1536,7 +1535,9 @@ mod profile_tests {
                 !entry.is_empty() && !shallow.is_empty(),
                 "complete regular {name} banks must be surveyed"
             );
-            eprintln!("ordinary dry-bank audit {name}: outer_blend={outer} level_differences={dry_edges:?}; geometry measurement, not a universal walkability gate");
+            eprintln!(
+                "ordinary dry-bank audit {name}: outer_blend={outer} level_differences={dry_edges:?}; geometry measurement, not a universal walkability gate"
+            );
             eprintln!(
                 "bank audit {name}: band={} dry-to-shallow level differences={entry:?}; shallow-band differences={shallow:?}; >1level examples={examples:?}",
                 band.len()
@@ -1613,7 +1614,7 @@ mod profile_tests {
 
     #[test]
     fn mountain_lake_is_screened_from_authored_valley_eyes() {
-        use super::super::{nearest_hex, world_xz, LEVEL_HEIGHT};
+        use super::super::{LEVEL_HEIGHT, nearest_hex, world_xz};
         let g = super::super::tests::compiler(false);
         let d = g.geography.document.as_ref().expect("geography");
         let center = g.geography.world_hex(d.upper_lake.center);
