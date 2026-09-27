@@ -547,7 +547,7 @@ fn finish_terrain_profiled(
             }
         }
     }
-    for channel in [&d.falls, &d.river] {
+    for (channel, expand_cuts) in [(&d.falls, false), (&d.river, true)] {
         let pre_channel_ground = h;
         let mut required_water = None;
         let (dist, target, _) = route_distance([x, z], &channel.points);
@@ -674,7 +674,7 @@ fn finish_terrain_profiled(
                     .into_iter()
                     .any(|lake| irregular([x, z], lake.center, lake.radii, lake.phase) < 1.)
             {
-                h = dry_reach_support(d, [x, z], channel, pre_channel_ground);
+                h = dry_reach_support(d, [x, z], channel, pre_channel_ground, expand_cuts);
                 if let Some(level) = required_water {
                     h = h.max(level);
                 }
@@ -703,13 +703,14 @@ fn finish_terrain_profiled(
 }
 
 /// Compact support from all reaches, independent of nearest reach selection.
-/// Positive ordinary shoulders may extend; cuts and plunge support retain the
-/// original narrow footprint. The max/min union is value-continuous, not C1.
+/// Ordinary river cuts and raised shoulders use broad transitions. Waterfalls
+/// keep their narrow cuts. The max/min reach union is value-continuous, not C1.
 fn dry_reach_support(
     d: &GrandGeographyDocument,
     point: [f64; 2],
     channel: &super::geography::Watercourse,
     ground: f64,
+    expand_cuts: bool,
 ) -> f64 {
     let Some(banks) = &d.ordinary_channel_banks else {
         return ground;
@@ -724,7 +725,7 @@ fn dry_reach_support(
     let mut cut: f64 = 0.;
     let half = channel.width * 0.5;
     let outer = banks.dry_outer_blend.unwrap_or(20.);
-    for pair in channel.points.windows(2) {
+    for (index, pair) in channel.points.windows(2).enumerate() {
         let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
             continue;
         };
@@ -767,7 +768,41 @@ fn dry_reach_support(
         uplift = uplift
             .max(delta.max(0.) * narrow)
             .max(delta.max(0.).min(support.maximum_outer_rise) * weight);
-        cut = cut.min(delta.min(0.) * narrow);
+        let cut_weight = if expand_cuts && ordinary {
+            // Broaden a whole ordinary chain, not each reach's end cap. The
+            // extra width fades over its own extent at the lake/ocean/plunge
+            // ends, while shared internal bends keep their continuous bank.
+            // Unclamped projection also fades a downstream reach's influence
+            // when its low end datum would otherwise cut behind the outlet.
+            let ordinary_length = |pair: &[[f64; 3]]| {
+                let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
+                    return None;
+                };
+                let length = (b[0] - a[0]).hypot(b[2] - a[2]);
+                (length > 0. && (b[1] - a[1]).abs() / length <= banks.max_longitudinal_grade)
+                    .then_some(length)
+            };
+            let before: f64 = channel
+                .points
+                .windows(2)
+                .take(index)
+                .rev()
+                .map_while(ordinary_length)
+                .sum();
+            let after: f64 = channel
+                .points
+                .windows(2)
+                .skip(index + 1)
+                .map_while(ordinary_length)
+                .sum();
+            let chain_end = smooth((before + along).min(after + length - along) / outer);
+            let cut_width =
+                20. + mouth * chain_end * smooth(ground / support.sea_fade_height) * (outer - 20.);
+            smooth((half + cut_width - distance) / (cut_width - collar))
+        } else {
+            narrow
+        };
+        cut = cut.min(delta.min(0.) * cut_weight);
     }
     ground + uplift + cut
 }
@@ -943,8 +978,8 @@ mod profile_tests {
         let mut reversed = d.falls.clone();
         reversed.points.reverse();
         for point in [[474.4, 278.4], [513.6, 346.3], [435., 310.], [495., 410.]] {
-            let height = dry_reach_support(&d, point, &d.falls, 45.);
-            let reverse = dry_reach_support(&d, point, &reversed, 45.);
+            let height = dry_reach_support(&d, point, &d.falls, 45., false);
+            let reverse = dry_reach_support(&d, point, &reversed, 45., false);
             assert!(
                 (height - reverse).abs() < 1e-9,
                 "reach iteration order changed {point:?}"
@@ -952,12 +987,24 @@ mod profile_tests {
             for axis in 0..2 {
                 let mut adjacent = point;
                 *adjacent.get_mut(axis).expect("2D coordinate") += 1e-6;
-                assert!((height - dry_reach_support(&d, adjacent, &d.falls, 45.)).abs() < 1e-4);
+                assert!(
+                    (height - dry_reach_support(&d, adjacent, &d.falls, 45., false)).abs() < 1e-4
+                );
             }
         }
-        assert!((dry_reach_support(&d, [1000., 1000.], &d.falls, 45.) - 45.).abs() < 1e-9);
-        assert!((dry_reach_support(&d, [470., 300.], &d.falls, -1.) + 1.).abs() < 1e-9);
-        for channel in [&d.falls, &d.river] {
+        assert!((dry_reach_support(&d, [1000., 1000.], &d.falls, 45., false) - 45.).abs() < 1e-9);
+        assert!((dry_reach_support(&d, [470., 300.], &d.falls, -1., false) + 1.).abs() < 1e-9);
+        // High dry ground beside this ordinary river chain must approach the
+        // channel over its broad bank, including either side of the shared bend.
+        for point in [[195., -180.], [180., -240.], [175., -250.], [170., -260.]] {
+            let narrow = dry_reach_support(&d, point, &d.river, 40., false);
+            let broad = dry_reach_support(&d, point, &d.river, 40., true);
+            assert!(
+                broad < narrow - 1.,
+                "ordinary river cut stayed narrow at {point:?}"
+            );
+        }
+        for (channel, expand_cuts) in [(&d.falls, false), (&d.river, true)] {
             for pair in channel.points.windows(2) {
                 let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
                     continue;
@@ -971,8 +1018,8 @@ mod profile_tests {
                         let left = [p[0] - along[0] * 1e-6, p[1] - along[1] * 1e-6];
                         let right = [p[0] + along[0] * 1e-6, p[1] + along[1] * 1e-6];
                         assert!(
-                            (dry_reach_support(&d, left, channel, ground)
-                                - dry_reach_support(&d, right, channel, ground))
+                            (dry_reach_support(&d, left, channel, ground, expand_cuts)
+                                - dry_reach_support(&d, right, channel, ground, expand_cuts))
                             .abs()
                                 < 1e-4,
                             "reach endpoint changed field value at {p:?}"
