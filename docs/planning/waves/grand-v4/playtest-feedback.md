@@ -161,3 +161,34 @@ the source silhouette but destroyed much of a previously connected low-ground
 region east of Crystal; it has not been integrated. Lower-ground continuity takes
 priority while refining that profile. Preserve the steep inner ascent and hidden
 lake screens, while joining their outer bodies to usable lower terrain.
+
+## September 27 — plain04 keeps the broad-traversability concern open
+
+Five fresh actual-game views still fail the mountain composition. Crystal has a
+regular steep exterior, the Frozen connection reads as a raised shelf, and the
+upper lake is surrounded by narrow spires instead of substantial connected rock
+shoulders. The low valley is wider, but that does not settle the user's concern.
+Capture stopped after these failures were established; the remaining eleven
+requested views were not produced and the diagnostic pipeline remains failed.
+
+The whole-domain plain03-to-plain04 comparison found 6,681 columns lost from the
+largest ordinary-edge dry component, against 384 gains. The largest regression
+comes from Crystal's outer rock rising across previously usable hills; another
+comes from the shoreline lowering ground below the root room's old ceiling.
+Source corrections now confine the Crystal enclosure and fit the room beneath
+its actual natural roof. A broader dry riverbank also addresses the remaining
+descent after the now-successful swimming exit. New package evidence is pending;
+the old failed receipts remain unchanged.
+
+Garden, Crystal Ascent and Frozen Woods pass their focused actual-controller
+checks on unchanged plain04 after fixing the review driver to visit every stair
+support. An independent audit confirms all 815 grounded arrivals in exact order.
+No terrain, movement limit or fall threshold was loosened to get those passes.
+These routes cannot establish broad hillside movement or final presentation.
+
+The Grand V3 falls reference shows broad overlapping mountain shoulders with
+unequal connected crests around the cleft. A separate exact-source upper-body
+study will carry that shape into the current design while preserving lower
+foothills, the continuous Crystal/Frozen route and the hidden lake. Compare the
+entire affected belt, including the transition into steep upper rock; do not
+revive narrow route validators or move the fixed cross-country endpoints.

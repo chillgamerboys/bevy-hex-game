@@ -613,3 +613,61 @@ An independent final-column comparison found major old-foot connectivity losses
 east of Crystal. It remains outside integration while common low-tail controls
 are corrected and the same neighborhoods are compared again. Do not patch the
 test lines, move their endpoints or replace the regional check with passing paths.
+
+### Plain04 findings and bounded repairs — September 27
+
+Clean `ce62c51` produced immutable `compiled-r02-plain-04`, package
+`3599924959314433951`, source `16240700951371460696`. Strict compilation and
+readback passed: 3,323,269 columns, 13,134 chunks, 2,608,301 liquids and no
+objects. Mainland and Crystal areas are unchanged. The candidate is **not
+accepted**. Both reviewers inspected the five produced original images and the
+contact sheet. Crystal still reads as a steep regular enclosure, Frozen Woods as
+a raised shelf, and the upper-lake peaks as narrow isolated spires. The northwest
+view also exposes large triangular curtains whose actual mesh ownership requires
+diagnosis. Capture was deliberately interrupted after these failures were clear;
+five of sixteen requested frames were produced, and the pipeline remains FAIL.
+
+The direct plain03-to-plain04 emitted-column comparison preserves the same domain
+and original band membership. Its largest dry one-level-edge component loses
+6,297 columns net (6,681 lost, 384 gained). Of the losses, 5,414 are raised around
+Crystal, with a median 35m increase; 636 lose their roof above the root room.
+The earlier local low-foot survey missed previously usable 70–120m terrain.
+This is a regression even though the three unchanged dry controller probes pass.
+The mixed crossing successfully exits swimming but fails afterward on a dry-bank
+descent: 0.40686m and 27 airborne ticks exceed the unchanged 0.3509m/26 limits.
+
+The initially failing garden and Crystal controller runs exposed a separate
+review-driver bug. A 2m waypoint radius skipped authored supports only 1.732m
+apart, while its vertical tolerance accepted two unclimbed risers. `8b142e4`
+requires each authored support to be reached grounded within 0.25m horizontally
+and 0.175m vertically. Cross-country behavior and fall limits are unchanged. Two
+regression tests and scoped app Clippy pass. On the unchanged plain04 package,
+garden 28/28, Crystal 522/522 and Frozen Woods 265/265 segments now pass. An
+independent audit matched all 815 arrivals to the published route in exact order
+and verified clean source/package identities and unchanged fall-observer code.
+This is focused plain-route evidence, not full expedition or dressed traversal.
+
+Three world corrections are integrated additively through `8d49381`:
+
+- `2ab1995` confines Crystal's steep enclosure to its authored 112–146m annulus,
+  preserving the underlying hills outside that footprint.
+- `46a4099` lowers the root-room ceiling from 59m to 53m while retaining its 37m
+  floor, routes and architecture. All 686 room columns retain at least seven
+  voxel levels of natural cover; no exterior cover mound is added.
+- `8d49381` broadens raised dry ordinary-channel banks, fading the extension
+  before the sea. The failed post-exit strip now varies by one voxel. High gorge
+  banks and water levels retain their separate treatment.
+
+The matching world-lane bytes pass 61 Grand tests (two diagnostic samplers
+ignored), exhaustive emitted flow acceptance and scoped schematic Clippy. These
+repairs still require a new immutable package and the same whole-domain survey
+and actual controllers. The next upper-mountain study uses broad asymmetric rock
+shoulders and secondary crests, informed by the Grand V3 reference. It remains
+separate from production until exact-source views and full-belt comparisons have
+been reviewed. Low-ground preservation and hidden-lake screening remain required.
+
+Runtime experiments remain outside integration. A default-off dry-material pair
+tests whether the live/proxy finish mismatch contributes to the visible patch;
+a separate actual-mesh ray probe identifies the northwest curtains. Neither
+changes source terrain or authorizes the banked seam geometry prototype. All
+source and capture work retains separate ownership and serialized Cargo use.
