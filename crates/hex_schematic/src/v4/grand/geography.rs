@@ -647,6 +647,50 @@ impl GrandGeography {
         ((1.08 - r) * 5.).clamp(0., 1.)
             * (0.72 + 0.20 * (x * 0.014 + z * 0.019).sin()).clamp(0., 1.)
     }
+    /// A landmark composition clearing, independent of any review camera.
+    /// The core joins the roots, the western lake shore and the nearest camp;
+    /// irregular feathered margins keep this an opening within the forest.
+    pub(super) fn landmark_glade_weight(&self, p: WorldHex) -> f64 {
+        let Some(d) = &self.document else {
+            return 0.;
+        };
+        let Some(camp) = d.frames.get("camp_06") else {
+            return 0.;
+        };
+        let point = self.model_xz(p);
+        let tree = d.tree.center;
+        let shore = [
+            d.lower_lake.center[0] - d.lower_lake.radii[0] * 0.83,
+            d.lower_lake.center[1] - d.lower_lake.radii[1] * 0.20,
+        ];
+        let mut weight: f64 = 0.;
+        for (center, radii, phase) in [
+            ([tree[0] - 12., tree[1] - 5.], [100., 80.], 0.4),
+            (shore, [42., 72.], 2.1),
+            (camp.origin, [45., 32.], 1.3),
+        ] {
+            let radius = irregular(point, center, radii, phase);
+            weight = weight.max(super::smooth(((1.22 - radius) / 0.22).clamp(0., 1.)));
+        }
+        let approach = [
+            [camp.origin[0], camp.origin[1], 30.],
+            [tree[0] - 65., tree[1] - 65., 38.],
+            [tree[0] - 20., tree[1] - 20., 48.],
+        ];
+        for pair in approach.windows(2) {
+            let [a, b] = pair else {
+                continue;
+            };
+            let (distance, t) = segment(point, [a[0], a[1]], [b[0], b[1]]);
+            let width = (a[2] * (1. - t) + b[2] * t)
+                * (1. + 0.08 * (std::f64::consts::TAU * t + 0.7).sin());
+            weight = weight.max(super::smooth(
+                ((width + 12. - distance) / 12.).clamp(0., 1.),
+            ));
+        }
+        weight
+    }
+
     pub(super) fn frozen_planting_weight(&self, p: WorldHex) -> f64 {
         let Some(d) = &self.document else {
             return 0.;

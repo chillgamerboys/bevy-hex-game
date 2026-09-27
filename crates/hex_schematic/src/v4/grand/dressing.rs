@@ -427,6 +427,26 @@ fn compose_forest(g: &GrandCompiler, out: &mut Vec<ObjectInstance>) -> Result<()
             details += 1;
         }
     }
+    // Thin only the geography-owned landmark glade after ordinary placement.
+    // Do not refill its allocation elsewhere: the surrounding forest keeps its
+    // stable authored instances and density. Whole trees are omitted rather
+    // than trimming crowns into a straight clearing boundary; low detail props
+    // and the actual World Tree/camp structures remain untouched.
+    out.retain(|object| {
+        if !object.id.starts_with("grand/tree/") {
+            return true;
+        }
+        if object
+            .occupancy
+            .iter()
+            .any(|column| g.geography.landmark_glade_weight(column.position) >= 1.)
+        {
+            return false;
+        }
+        let weight = g.geography.landmark_glade_weight(object.origin.column);
+        let sample = (forest_hash(g.source.seed, object.origin.column) % 10_000) as f64 / 10_000.;
+        sample >= weight
+    });
     Ok(())
 }
 fn forest_detail(
@@ -1149,6 +1169,12 @@ mod forest_tests {
             let frame = g.geography.frame(name).expect("clearing");
             assert!(reserved_growth(&g, frame.hex([0., 0.])), "{name}");
         }
+        for name in ["world_tree", "camp_06"] {
+            let frame = g.geography.frame(name).expect("landmark glade");
+            assert!(
+                (g.geography.landmark_glade_weight(frame.hex([0., 0.])) - 1.).abs() < f64::EPSILON
+            );
+        }
     }
 
     #[test]
@@ -1173,6 +1199,13 @@ mod forest_tests {
         let mut families = BTreeSet::new();
         let mut canopy = BTreeSet::new();
         for tree in &trees {
+            assert!(
+                tree.occupancy
+                    .iter()
+                    .all(|column| g.geography.landmark_glade_weight(column.position) < 1.),
+                "whole ordinary crown enters the root/lakeside glade: {}",
+                tree.id
+            );
             families.insert(tree.asset.as_str());
             assert!(
                 !overlaps(&occupied, &tree.occupancy),
