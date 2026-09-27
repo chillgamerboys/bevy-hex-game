@@ -16,8 +16,8 @@ mod route_probe;
 #[cfg(any(test, feature = "test-support"))]
 pub use route_probe::DryRouteProbeFailure;
 mod separation;
-use separation::separate_many;
 pub use separation::ActorSeparationStats;
+use separation::separate_many;
 mod steering;
 #[cfg(test)]
 mod tests;
@@ -1332,6 +1332,19 @@ impl ArenaSession {
                     .into_iter()
                     .any(|point| self.collision.sight_clear(observer.eye(), point))
         })
+    }
+
+    /// Full authoritative body clearance against solids, including swimming poses.
+    /// Unlike `actor_volume_valid` and `actor_pose_valid`, this does not require
+    /// dry volume or ground support. Callers must separately validate movement
+    /// mode, terrain residency and any required support.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn actor_solid_volume_valid(&self, id: ActorId) -> bool {
+        self.actors
+            .iter()
+            .find(|a| a.id == id)
+            .is_some_and(|a| shapes::clear(&self.collision, a, a.feet, a.body_yaw))
     }
 
     /// Full body and dry-volume check, allowing an ordinary descending step to be
