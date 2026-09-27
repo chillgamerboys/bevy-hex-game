@@ -172,14 +172,13 @@ pub(super) fn initialize(world: &mut World, mut content: Content) -> Result<(), 
             return Err("Grand biome companion exceeds1MiB".into());
         }
         let map: GrandBiomeMap = ron::de::from_bytes(&bytes).map_err(|e| e.to_string())?;
-        if map.version != 1
-            || map.package_fingerprint != source.manifest().fingerprint
+        if map.package_fingerprint != source.manifest().fingerprint
             || map.source_fingerprint != source.manifest().source_fingerprint
-            || map.mainland_rows.len() > 10000
-            || map.crystal_rows.len() > 1000
         {
             return Err("Grand biome companion identity/bounds mismatch".into());
         }
+        map.validate_in_bounds(overview.radius, overview.level_bounds)
+            .map_err(|error| error.to_string())?;
         for rows in [&map.mainland_rows, &map.crystal_rows] {
             admission::validate_biome_rows(rows, overview.radius)?;
         }
