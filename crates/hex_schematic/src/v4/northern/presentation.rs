@@ -1,11 +1,15 @@
 //! Immutable presentation facts derived from the same authored world geometry.
-use hex_world_contracts::{ChunkId, LiquidKind, VoxelPosition, WorldHex};
+use hex_world_contracts::{ChunkId, ColumnData, LiquidKind, VoxelPosition, WorldHex};
 use serde::{Deserialize, Serialize};
 
 /// Maximum exact inland liquid columns in a distant presentation companion.
 pub const MAX_INLAND_WATER_COLUMNS: usize = 100_000;
 /// Maximum disconnected exposed intervals along one hex face.
 pub const MAX_INLAND_WATER_SIDE_INTERVALS: usize = 16;
+/// Total exact solid columns including chunk-edge halo, before allocation.
+pub const MAX_INLAND_TERRAIN_COLUMNS: usize = 500_000;
+/// Compact solid runs across all exact inland presentation columns.
+pub const MAX_INLAND_TERRAIN_RUNS: usize = 1_500_000;
 
 /// An authored camera in final runtime coordinates, independent of app literals.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,6 +45,12 @@ pub struct InlandWaterChunk {
     pub coordinate: ChunkId,
     /// Canonically ordered unique columns belonging to this chunk.
     pub columns: Vec<InlandWaterColumn>,
+    /// Complete solid-only columns of this water-bearing chunk. Replaces the
+    /// coarse terrain proxy here; these are presentation facts, not collision.
+    pub terrain: Vec<ColumnData>,
+    /// One exact neighboring-column ring, for face exposure and edge conformity.
+    /// Halo columns must never render as duplicate terrain or request residency.
+    pub halo: Vec<ColumnData>,
 }
 
 /// Exposed liquid faces measured against actual solid and liquid neighbors.

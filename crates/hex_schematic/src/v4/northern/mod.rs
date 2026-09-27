@@ -10,7 +10,8 @@ mod objects;
 mod presentation;
 pub use presentation::{
     InlandWaterChunk, InlandWaterColumn, InlandWaterOverview, NorthernReviewCamera,
-    MAX_INLAND_WATER_COLUMNS, MAX_INLAND_WATER_SIDE_INTERVALS,
+    MAX_INLAND_TERRAIN_COLUMNS, MAX_INLAND_TERRAIN_RUNS, MAX_INLAND_WATER_COLUMNS,
+    MAX_INLAND_WATER_SIDE_INTERVALS,
 };
 #[cfg(test)]
 mod tests;
