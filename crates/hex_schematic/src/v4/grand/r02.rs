@@ -1,7 +1,7 @@
 //! Layered production solids and clear routes from the shared geography document.
 use super::*;
 /// Each layer and presentation samples the same conservative physical distance
-/// through the exact connected coast. One graph step spans at least1.5worldu.
+/// through the exact connected coast. One graph step spans at least 1.5 world units.
 fn coast_distance(coast: &[u16], p: WorldHex) -> f64 {
     f64::from(grid_value(coast, p, 0)) * 1.5
 }
@@ -144,19 +144,6 @@ impl Layered {
         }
         let mut ribbon = Vec::new();
         for (p, mut choices) in candidates {
-            // End the Crystal ribbon at its shared exit cross-section.
-            // A rounded cap beyond this line belongs to Frozen's departing
-            // surface and must not publish obsolete lower stair supports.
-            if id == "crystal_ascent" {
-                if let Some(end) = points.last() {
-                    let point = g.model_xz(p);
-                    if (point[0] - end[0]).hypot(point[1] - end[2]) < width
-                        && point[1] > end[2] + 0.5
-                    {
-                        continue;
-                    }
-                }
-            }
             // A flat start cap meets the final Crystal tread without a
             // rounded platform overhanging several earlier stair treads.
             if id == "frozen_shore" {
@@ -180,9 +167,16 @@ impl Layered {
             for c in choices {
                 if let Some(last) = clusters.last_mut() {
                     // Overlapping samples of one bend form a single surface.
-                    // Two2-level slabs need8clear levels between them to be
+                    // Two 2-level slabs need 8 clear levels between them to be
                     // distinct traversable stories; closer proposals coalesce.
-                    if last.last().is_some_and(|old| c.0 - old.0 < 10) {
+                    if last.last().is_some_and(|old| {
+                        c.0 - old.0
+                            < if layer == SupportLayer::Exterior {
+                                10
+                            } else {
+                                6
+                            }
+                    }) {
                         last.push(c);
                         continue;
                     }
@@ -193,6 +187,21 @@ impl Layered {
                 let Some(&(top, _)) = cluster.iter().min_by(|a, b| a.1.total_cmp(&b.1)) else {
                     continue;
                 };
+                // End the Crystal ribbon at its shared exit cross-section.
+                // A rounded cap beyond this line belongs to Frozen's departing
+                // surface and must not publish obsolete lower stair supports.
+                if id == "crystal_ascent" {
+                    if let Some(end) = points.last() {
+                        let point = g.model_xz(p);
+                        if top >= g.top_level(end[1]) - 8
+                            && (point[0] - end[0]).hypot(point[1] - end[2]) < width
+                            && point[1] > end[2] + 0.5
+                            && !supports.iter().any(|s| s.column == p && s.level + 1 == top)
+                        {
+                            continue;
+                        }
+                    }
+                }
                 // Where a ribbon edge enters its room across an ordinary
                 // one-level threshold, the room floor is the composed support.
                 // Publish that floor rather than a buried pre-union stair cap.
@@ -201,7 +210,12 @@ impl Layered {
                     .get(&p)
                     .into_iter()
                     .flatten()
-                    .find(|room| room.layer == layer && !room.open && room.top.abs_diff(top) <= 1)
+                    .find(|room| {
+                        room.layer == layer
+                            && !room.open
+                            && room.top >= top
+                            && room.top.abs_diff(top) <= 1
+                    })
                     .map_or(top, |room| room.top);
                 let xz = g.model_xz(p);
                 let natural_top = g.document.as_ref().map_or(top, |d| {
