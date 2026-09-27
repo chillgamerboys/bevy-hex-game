@@ -3105,7 +3105,7 @@
             180
           ]
         ],
-        "lower_slope_power": 2.0
+        "lower_slope_power": 3.0
       },
       {
         "name": "eastern-lake-and-outlet",
