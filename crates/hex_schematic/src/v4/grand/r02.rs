@@ -760,5 +760,20 @@ mod cave_cover_tests {
             *last, support,
             "the route must join the original garden court"
         );
+        for p in [WorldHex::new(739, -283), WorldHex::new(739, -284)] {
+            let rim = compiler
+                .influences
+                .get(&p.chunk())
+                .into_iter()
+                .flatten()
+                .find(|object| object.id == "grand/fountain-rim")
+                .expect("the existing fountain rim remains authored in its source chunk");
+            assert!(
+                rim.occupancy
+                    .iter()
+                    .any(|column| column.position == p && !column.runs.is_empty()),
+                "the garden approach must preserve the nearby fountain rim at {p:?}"
+            );
+        }
     }
 }
