@@ -1041,6 +1041,7 @@ struct ObjectFollower {
     side: Option<f32>,
     entry_distance: f32,
     entries: u32,
+    blocked_side_reversals: u32,
     heading: Vec3,
 }
 impl ObjectFollower {
@@ -1082,15 +1083,25 @@ impl ObjectFollower {
         // direction after a second root has physically stopped it. The shorter
         // probe lets the driver turn inside a narrow local gap; it still reads
         // only objects and moves exclusively through ordinary forward input.
-        self.heading = [2.4, 0.75]
-            .into_iter()
-            .find_map(|reach| {
+        let clear_heading = |side| {
+            [2.4, 0.75].into_iter().find_map(|reach| {
                 angles
                     .into_iter()
-                    .map(|angle| Quat::from_rotation_y(angle * sign) * direct)
+                    .map(|angle| Quat::from_rotation_y(angle * side) * direct)
                     .find(|direction| !blocked(*direction, reach))
             })
-            .unwrap_or(Vec3::ZERO);
+        };
+        self.heading = if let Some(direction) = clear_heading(sign) {
+            direction
+        } else if let Some(direction) = clear_heading(-sign) {
+            // A cluster can close the entire retained half-circle. Reverse
+            // only at that dead end, then retain the new side normally.
+            self.side = Some(-sign);
+            self.blocked_side_reversals += 1;
+            direction
+        } else {
+            Vec3::ZERO
+        };
         self.heading
     }
 }
@@ -1115,6 +1126,37 @@ fn object_follower_remembers_side_and_rechecks_a_blocked_heading() {
     let final_heading = follower.steer(Vec3::X * 3.0, target, |_, _| false);
     assert_eq!(final_heading, Vec3::X);
     assert!(follower.side.is_none());
+}
+
+#[test]
+fn object_follower_reverses_only_after_its_entire_side_is_blocked() {
+    let mut follower = ObjectFollower::default();
+    let target = Vec3::X * 40.0;
+    let first = follower.steer(Vec3::ZERO, target, |d, _| d.z > -0.6);
+    assert!(first.z < -0.6);
+    let retained = follower.side;
+    let still_clear = follower.steer(Vec3::ZERO, target, |d, _| d.z.abs() < 0.2);
+    assert!(still_clear.z < -0.2);
+    assert_eq!(follower.side, retained);
+    assert_eq!(follower.blocked_side_reversals, 0);
+
+    let reversed = follower.steer(Vec3::ZERO, target, |d, _| d.z < 0.6);
+    assert!(reversed.z > 0.6, "use the available opposite half-circle");
+    assert_eq!(follower.side, retained.map(|sign| -sign));
+    assert_eq!(follower.blocked_side_reversals, 1);
+    assert_eq!(follower.entries, 1, "this is the same obstacle detour");
+
+    let held = follower.steer(Vec3::ZERO, target, |d, _| d.z.abs() < 0.2);
+    assert!(held.z > 0.2);
+    assert_eq!(follower.blocked_side_reversals, 1);
+}
+
+#[test]
+fn object_follower_stops_when_both_sides_are_blocked() {
+    let mut follower = ObjectFollower::default();
+    let heading = follower.steer(Vec3::ZERO, Vec3::X * 40.0, |_, _| true);
+    assert_eq!(heading, Vec3::ZERO);
+    assert_eq!(follower.blocked_side_reversals, 0);
 }
 
 fn block_reason(world: &World) -> Option<&'static str> {
@@ -1270,7 +1312,8 @@ fn traverse_route(
                     "side":follower.side,"heading":direction.to_array(),
                     "entry_distance":follower.entry_distance,"nearby_object_columns":objects.occupied.len(),
                     "direct_blocked":objects.blocked((target-feet.with_y(0.0)).normalize_or_zero(), 2.4),
-                    "event":if follower.side != previous_side { if follower.side.is_some() { "begin" } else { "clear" } } else { "follow" },
+                    "blocked_side_reversals":follower.blocked_side_reversals,
+                    "event":if follower.side != previous_side { match (previous_side, follower.side) { (Some(_), Some(_)) => "blocked-side-reversal", (_, Some(_)) => "begin", (_, None) => "clear" } } else { "follow" },
                 }));
             }
             frame(app, direction);
