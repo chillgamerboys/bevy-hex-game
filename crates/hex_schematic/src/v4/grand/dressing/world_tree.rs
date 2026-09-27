@@ -459,12 +459,10 @@ mod tests {
                     "tree blocks a shared passage"
                 );
                 let (terrain, _) = g.column(column.position);
-                assert!(
-                    !terrain
-                        .runs
-                        .iter()
-                        .any(|ground| ground.bottom < run.top && run.bottom < ground.top)
-                );
+                assert!(!terrain
+                    .runs
+                    .iter()
+                    .any(|ground| ground.bottom < run.top && run.bottom < ground.top));
                 if run.material.starts_with("foliage") {
                     max_east = max_east.max(east.abs());
                     max_north = max_north.max(north.abs());

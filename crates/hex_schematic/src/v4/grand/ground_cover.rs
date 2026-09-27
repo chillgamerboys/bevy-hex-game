@@ -150,10 +150,8 @@ mod tests {
             .first_mut()
             .expect("tufts")
             .material = "stone".into();
-        assert!(
-            invalid
-                .validate_in_bounds(RADIUS as u32, [0, MAX_LEVEL])
-                .is_err()
-        );
+        assert!(invalid
+            .validate_in_bounds(RADIUS as u32, [0, MAX_LEVEL])
+            .is_err());
     }
 }
