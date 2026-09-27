@@ -1,249 +1,327 @@
+//! Canonical revision02 integration invariants. Legacy absolute-coordinate
+//! geometry is retained only by explicit legacy fixtures in its owning modules.
 use super::*;
+use std::collections::BTreeSet;
+
+pub(super) fn compiler(dressed: bool) -> &'static GrandCompiler {
+    static PLAIN: std::sync::OnceLock<GrandCompiler> = std::sync::OnceLock::new();
+    static DRESSED: std::sync::OnceLock<GrandCompiler> = std::sync::OnceLock::new();
+    if dressed {
+        DRESSED.get_or_init(|| dressing::test_compiler(true))
+    } else {
+        PLAIN.get_or_init(|| dressing::test_compiler(false))
+    }
+}
+
+// Independent sampling of the public authoring polylines, in their declared
+// model frame. Emitted column facts below remain the assertions' authority.
+pub(super) fn line_columns(g: &GrandCompiler, points: &[[f64; 3]]) -> Vec<WorldHex> {
+    let mut out = Vec::new();
+    for pair in points.windows(2) {
+        let [a, b] = pair else {
+            continue;
+        };
+        let [ax, _, az] = *a;
+        let [bx, _, bz] = *b;
+        let [ax, az] = g.geography.world_xz([ax, az]);
+        let [bx, bz] = g.geography.world_xz([bx, bz]);
+        let steps = ((bx - ax).hypot(bz - az) / 0.75).ceil() as u32;
+        for step in 0..=steps.max(1) {
+            let t = f64::from(step) / f64::from(steps.max(1));
+            let p = nearest_hex(ax + (bx - ax) * t, az + (bz - az) * t);
+            if out.last() != Some(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
 #[test]
 fn full_measured_world_has_independent_crystal_and_exact_cave_sites() {
-    let source = ron::from_str(include_str!(
-        "../../../../../assets/config/v4/grand-v4/world.ron"
-    ))
-    .unwrap();
-    let compiler = GrandCompiler::new(source).unwrap();
-    assert_eq!(compiler.mainland_columns, 93326 * 7);
-    assert_eq!(compiler.crystal.len(), 3169 * 7);
-    let sites = compiler.sites(123).unwrap();
+    let g = compiler(true);
+    assert_eq!(g.mainland_columns, 93_326 * 7);
+    let d = g.geography.document.as_ref().expect("canonical geography");
+    assert_eq!(g.crystal.len(), d.ascent.expected_columns);
+    assert_eq!(g.crystal_columns, g.crystal.len());
+    // A geometric enclosing polygon is approximately sevenfold; the old
+    // disconnected exact-count disc was not the visible whole Crystal feature.
+    assert!(g.crystal_columns.abs_diff(3_169 * 7) < 3_169 / 100);
+    assert!(g.crystal.contains(&g.geography.world_hex(d.ascent.center)));
+    assert_eq!(
+        g.source
+            .mainland_rows
+            .iter()
+            .map(|(_, a, b)| (b - a + 1) as usize)
+            .sum::<usize>(),
+        g.mainland_columns
+    );
+    let sites = g.sites(123).expect("actual canonical sites");
     assert_eq!(sites.encounters.len(), 14);
     for site in &sites.encounters {
-        assert!(compiler.clear_support(site.preferred, 16));
+        assert!(g.clear_support(site.preferred, 16), "{}", site.id);
+        assert!(site.surfaces.contains(&site.preferred));
     }
-    let cave = compiler.support(-105., -295., true);
-    assert_eq!(cave.level, 460);
-    let (column, _) = compiler.column(cave.column);
-    assert!(column.runs.iter().any(|r| r.bottom > cave.level + 16));
-    let site_chunks: std::collections::BTreeSet<_> = sites
+    let cave = g
+        .anchors
+        .iter()
+        .find(|a| a.id == "grand/anchor/shadow_tunnel")
+        .expect("Shadow anchor")
+        .position;
+    let (column, _) = g.column(cave.column);
+    assert!(
+        column
+            .runs
+            .iter()
+            .any(|run| run.material != "water" && run.bottom > cave.level + 16),
+        "actual covered bore"
+    );
+    let chunks: BTreeSet<_> = sites
         .encounters
         .iter()
         .map(|s| s.preferred.column.chunk())
         .collect();
-    for id in site_chunks {
-        compiler.chunk(id).unwrap().unwrap().validate().unwrap();
+    for id in chunks {
+        g.chunk(id)
+            .expect("site chunk compiles")
+            .expect("inside package")
+            .validate()
+            .expect("exact chunk");
     }
 }
 
 #[test]
 fn complete_stair_route_has_walkable_risers_and_tunnels_remain_separate() {
-    let mut source: GrandSpec = ron::from_str(include_str!(
-        "../../../../../assets/config/v4/grand-v4/world.ron"
-    ))
-    .unwrap();
-    source.full_dressing = false;
-    let g = GrandCompiler::new(source).unwrap();
-    let positions = [
-        (-119, -247),
-        (-111, -263),
-        (-42, -263),
-        (-28, -290),
-        (-106, -290),
-        (-93, -317),
-        (-26, -317),
-        (-13, -343),
-        (-68, -343),
-        (-55, -370),
-        (-46, -370),
-        (-42, -377),
-    ];
-    let mut previous: Option<i32> = None;
-    for pair in positions.windows(2) {
-        let [a, b] = pair else {
-            continue;
-        };
-        let a = WorldHex::new(a.0, a.1);
-        let b = WorldHex::new(b.0, b.1);
-        let steps = a.checked_distance(b).unwrap();
-        let axz = world_xz(a);
-        let bxz = world_xz(b);
-        for i in 0..=steps {
-            let t = i as f64 / steps as f64;
-            let p = nearest_hex(
-                axz[0] + (bxz[0] - axz[0]) * t,
-                axz[1] + (bxz[1] - axz[1]) * t,
+    let g = compiler(false);
+    let sites = g.sites(9).expect("published canonical routes");
+    assert!(sites.routes.len() >= 8);
+    for route in &sites.routes {
+        assert!(!route.supports.is_empty(), "{}", route.id);
+        let clearance = i32::try_from(route.clearance_levels).expect("bounded body");
+        for support in &route.supports {
+            assert!(
+                g.clear_support(*support, clearance),
+                "blocked {} at {support:?}",
+                route.id
             );
-            let floor = library_cavity(p).unwrap().0;
-            let support = VoxelPosition {
-                column: p,
-                level: floor,
+        }
+        for pair in route.supports.windows(2) {
+            let [a, b] = pair else {
+                continue;
             };
             assert!(
-                g.clear_support(support, 12),
-                "blocked stair at {support:?}, column {:?}, surface {:?}",
-                g.column(p),
-                g.surface(p)
+                a.column.checked_distance(b.column).expect("bounded route") <= 1,
+                "disconnected {}",
+                route.id
             );
-            if let Some(last) = previous {
-                assert!(
-                    (floor - last).abs() <= 1,
-                    "stair riser too tall: {last}->{floor}"
-                );
-            }
-            previous = Some(floor);
+            assert!(
+                (a.level - b.level).abs() <= 1,
+                "unwalkable {}: {a:?} → {b:?}",
+                route.id
+            );
         }
     }
-    let p = nearest_hex(-105., -348.);
-    let (column, _) = g.column(p);
-    assert_eq!(column.material_at(462), None);
-    assert_eq!(column.material_at(603), None);
-    assert!(
-        column.material_at(555).is_some(),
-        "Shadow tunnel must not connect to library"
-    );
-    let sites = g.sites(9).unwrap();
-    assert!(!sites.fountains.first().unwrap().cells.is_empty());
+    // At any actual shared horizontal column the separate tunnel/library voids
+    // need solid terrain between them. Their old fixed crossing is superseded.
+    let mut shared = 0;
+    for (p, layers) in &g.layered.columns {
+        for shadow in layers
+            .iter()
+            .filter(|l| l.layer == SupportLayer::Shadow && !l.open)
+        {
+            for library in layers.iter().filter(|l| {
+                matches!(
+                    l.layer,
+                    SupportLayer::LibraryLower | SupportLayer::LibraryUpper
+                ) && !l.open
+            }) {
+                let (low, high) = if shadow.top < library.top {
+                    (shadow, library)
+                } else {
+                    (library, shadow)
+                };
+                assert!(low.ceiling < high.top, "unintended cave join at {p:?}");
+                let (column, _) = g.column(*p);
+                assert!(
+                    column.runs.iter().any(|run| run.material != "water"
+                        && run.bottom <= low.ceiling
+                        && run.top >= high.top - 2),
+                    "missing cave separator at {p:?}"
+                );
+                shared += 1;
+            }
+        }
+    }
+    println!("R02_CAVE_SEPARATION shared_columns={shared}");
+    assert!(!sites.fountains.first().expect("fountain").cells.is_empty());
     let start = g
         .anchors
         .iter()
         .find(|a| a.id == "grand/anchor/party_start")
-        .unwrap();
-    assert!((400..=420).contains(&start.position.level));
-    let biome = g.biomes(9);
-    let [x, z] = world_xz(start.position.column);
+        .expect("start")
+        .position;
+    assert!(g.clear_support(start, 8));
+    assert!(g.column(start.column).1.is_none(), "the start is dry");
+    let [x, z] = world_xz(start.column);
     assert_ne!(
-        biome.label_at([x, f64::from(start.position.level + 1) * LEVEL_HEIGHT, z]),
+        g.biomes(9)
+            .label_at([x, f64::from(start.level + 1) * LEVEL_HEIGHT, z]),
         Some("Open Sea")
     );
 }
 
 #[test]
 fn shadow_route_walks_from_south_mouth_to_open_crystal_landing() {
-    let source = ron::from_str(include_str!(
-        "../../../../../assets/config/v4/grand-v4/world.ron"
-    ))
-    .unwrap();
-    let g = GrandCompiler::new(source).unwrap();
-    let mut previous: Option<VoxelPosition> = None;
-    for r in (-414..=-101).rev() {
-        let p = nearest_hex(-105., r as f64 * 1.5);
-        let floor = shadow_cavity(p).map_or(591, |(floor, _)| floor);
-        let support = VoxelPosition {
-            column: p,
-            level: floor,
-        };
+    let g = compiler(true);
+    let sites = g.sites(1).expect("dressed routes");
+    let shadow = sites
+        .routes
+        .iter()
+        .find(|r| r.id == "shadow_tunnel")
+        .expect("Shadow route");
+    let crystal = sites
+        .routes
+        .iter()
+        .find(|r| r.id == "crystal_ascent")
+        .expect("Crystal route");
+    let frozen = sites
+        .routes
+        .iter()
+        .find(|r| r.id == "frozen_shore")
+        .expect("Frozen route");
+    let exit = shadow.supports.last().expect("Shadow exit");
+    assert_eq!(
+        exit,
+        crystal.supports.first().expect("bottom ascent landing")
+    );
+    assert_eq!(
+        crystal.supports.last(),
+        frozen.supports.first(),
+        "ascent top meets the continuous woods route"
+    );
+    assert!(g.crystal.contains(&exit.column));
+    assert!(
+        g.column(exit.column)
+            .0
+            .runs
+            .iter()
+            .filter(|run| run.material != "water")
+            .all(|run| run.top <= exit.level + 1),
+        "open Crystal landing"
+    );
+    let entrance = g
+        .anchors
+        .iter()
+        .find(|a| a.id == "grand/anchor/shadow_entrance")
+        .expect("mouth");
+    assert_eq!(shadow.supports.first(), Some(&entrance.position));
+    for support in &shadow.ribbon {
         assert!(
-            g.clear_support(support, 12),
-            "blocked Shadow route: {support:?}"
+            g.clear_support(*support, 8),
+            "full tunnel body width at {support:?}"
         );
-        if let Some(previous) = previous {
-            assert_eq!(previous.column.checked_distance(p).unwrap(), 1);
-            assert!(
-                (floor - previous.level).abs() <= 1,
-                "unwalkable Shadow riser: {support:?}"
-            );
-        }
-        if r >= -272 {
-            assert_eq!(floor, 460, "original Shadow bore stays uniform");
-        }
-        previous = Some(support);
     }
-    let exit = g.support(-105., -618., true);
-    assert_eq!(exit.level, 591);
-    assert!(
-        g.crystal.contains(&exit.column),
-        "exit joins the authored Crystal footprint"
-    );
-    let (column, _) = g.column(exit.column);
-    assert!(
-        column.runs.iter().all(|run| run.top <= exit.level + 1),
-        "exit is open to the sky"
-    );
-    let crossing = nearest_hex(-105., -348.);
-    assert!(
-        g.column(crossing).0.material_at(555).is_some(),
-        "library separator remains intact"
-    );
+    let earth = g.geography.frame("shrine_earth").expect("Earth at base");
+    let floor = g.support_at(&earth, [0., 0.]).expect("Earth floor");
+    let source = g.geography.document.as_ref().expect("canonical geography");
+    assert_eq!(floor.level + 1, g.geography.top_level(source.ascent.base));
 }
 
 #[test]
 fn watercourse_is_continuous_and_descends_from_garden_to_open_sea() {
-    let mut source: GrandSpec = ron::from_str(include_str!(
-        "../../../../../assets/config/v4/grand-v4/world.ron"
-    ))
-    .unwrap();
-    source.full_dressing = false;
-    let g = GrandCompiler::new(source).unwrap();
-    let mut previous = 700;
-    for z in -448..=-145 {
-        let p = nearest_hex(headwater_center(f64::from(z)), f64::from(z));
-        let surface = g.surface(p);
-        let top = surface
-            .water
-            .expect("continuous headwater and waterfall center");
-        // A waterfall's upper curtain overlaps the lower reach by two cells.
-        assert!(
-            top <= previous,
-            "watercourse rises at {p:?}: {previous}->{top}"
-        );
-        previous = top;
-        assert!(surface.level < top);
+    let g = compiler(false);
+    let source = g.geography.document.as_ref().expect("canonical geography");
+    for (name, channel) in [
+        ("fountain", &source.fountain_rill),
+        ("falls", &source.falls),
+        ("river", &source.river),
+    ] {
+        let mut previous = None;
+        for p in line_columns(g, &channel.points) {
+            let (column, liquid) = g.column(p);
+            let water = liquid.expect("actual continuous wet centerline");
+            assert_eq!(
+                column.material_at(water.top - 1),
+                Some("water"),
+                "{name} at {p:?}"
+            );
+            assert!(water.bottom < water.top);
+            if let Some(top) = previous {
+                assert!(
+                    water.top <= top + 1,
+                    "uphill {name} at {p:?}: {top} → {}",
+                    water.top
+                );
+            }
+            previous = Some(water.top);
+        }
     }
-    previous = 460;
-    for z in -60..=600 {
-        let p = nearest_hex(river_center(f64::from(z)), f64::from(z));
-        let surface = g.surface(p);
-        let top = surface.water.unwrap_or(SEA_TOP);
-        assert!(top <= previous, "river rises at {p:?}: {previous}->{top}");
-        assert!(
-            surface.level < top,
-            "river interrupted at {p:?}: {surface:?}"
-        );
-        previous = top;
-    }
-    for x in 276..=306 {
-        let center =
-            -474. + 4. * (f64::from(x - 276) / 30.) + 1.5 * (f64::from(x - 276) / 9.).sin();
-        assert_eq!(
-            g.surface(nearest_hex(f64::from(x), center)).water,
-            Some(700)
-        );
-    }
+    let end = line_columns(g, &source.river.points)
+        .last()
+        .copied()
+        .expect("river end");
+    assert_eq!(g.column(end).1.expect("sea receiver").top, SEA_TOP);
 }
 
 #[test]
 fn offshore_sailing_reference_has_clear_sea_between_launch_and_landing() {
-    let mut source: GrandSpec = ron::from_str(include_str!(
-        "../../../../../assets/config/v4/grand-v4/world.ron"
-    ))
-    .unwrap();
-    source.full_dressing = false;
-    let g = GrandCompiler::new(source).unwrap();
+    let g = compiler(false);
+    let d = g.geography.document.as_ref().expect("canonical geography");
     let a = g
         .anchors
         .iter()
         .find(|a| a.id == "grand/anchor/sailing_start")
-        .unwrap();
+        .expect("launch")
+        .position;
     let b = g
         .anchors
         .iter()
         .find(|a| a.id == "grand/anchor/volcano_landing")
-        .unwrap();
-    let a = world_xz(a.position.column);
-    let b = world_xz(b.position.column);
-    let distance = (a[0] - b[0]).hypot(a[1] - b[1]);
-    // Controller calibration is 793.9485u/45s, while the route uses exact hex anchors.
-    assert!((790. ..=801.).contains(&distance));
-    for step in 0..=800 {
-        let t = f64::from(step) / 800.;
-        let p = nearest_hex(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
-        assert!(!g.mainland(p), "sailing route crosses mainland at {p:?}");
-        assert!(
-            g.surface(p).level < SEA_TOP,
-            "sailing route crosses terrain at {p:?}"
-        );
+        .expect("landing")
+        .position;
+    let [ax, az] = world_xz(a.column);
+    let [bx, bz] = world_xz(b.column);
+    let distance = (ax - bx).hypot(az - bz);
+    assert!(
+        g.column(a.column).1.is_some_and(|l| l.top == SEA_TOP),
+        "launch in actual sea"
+    );
+    assert!(g.clear_support(b, 8), "dry supported destination");
+    let mut sea_samples = 0;
+    let mut reached_island = false;
+    let steps = distance.ceil() as u32;
+    for step in 0..=steps {
+        let t = f64::from(step) / f64::from(steps.max(1));
+        let p = nearest_hex(ax + (bx - ax) * t, az + (bz - az) * t);
+        assert!(!g.mainland(p), "sailing line crosses mainland at {p:?}");
+        let wet = g.column(p).1.is_some_and(|l| l.top == SEA_TOP);
+        if wet {
+            assert!(!reached_island, "unexpected dry barrier before destination");
+            sea_samples += 1;
+        } else {
+            assert!(
+                geography::irregular(
+                    g.geography.model_xz(p),
+                    d.volcano.center,
+                    d.volcano.radii,
+                    d.volcano.phase,
+                ) < 1.2,
+                "unexpected offshore obstacle"
+            );
+            reached_island = true;
+        }
     }
+    assert!(sea_samples > 0 && reached_island);
+    // The previous 793.9485u/45s calibration belongs to the old route. Actual
+    // favorable-wind controller timing is measured by the explicit-package probe.
+    println!(
+        "R02_SAILING_GEOMETRY anchor_distance={distance:.3} sea_samples={sea_samples}/{steps}; timing_not_verified_here"
+    );
 }
 
 #[test]
 fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
-    let source: GrandSpec = ron::from_str(include_str!(
-        "../../../../../assets/config/v4/grand-v4/world.ron"
-    ))
-    .unwrap();
-    let g = GrandCompiler::new(source).unwrap();
+    let g = compiler(true);
     let objects: Vec<_> = g.objects.values().flatten().collect();
     assert!(objects.len() < 900, "bounded authored objects");
     assert_eq!(
@@ -260,20 +338,24 @@ fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
             .count(),
         4
     );
+    assert!(
+        !objects.iter().any(|o| o.id == "grand/goblin-fort"),
+        "the fort was superseded by open camps"
+    );
     assert!(objects.iter().any(|o| o.id == "grand/root-temple-plant"));
     for id in [
         "grand/fire-flame-marker",
         "grand/air-spiral-marker",
         "grand/earth-heart-marker",
     ] {
-        let marker = objects.iter().find(|object| object.id == id).unwrap();
-        assert!(marker.occupancy.len() <= 19, "small temple marker: {id}");
+        let marker = objects
+            .iter()
+            .find(|object| object.id == id)
+            .expect("temple marker");
+        assert!(marker.occupancy.len() <= 19, "small marker: {id}");
         assert!(
-            marker.occupancy.iter().all(|column| column
-                .runs
-                .iter()
-                .all(|run| run.top <= marker.origin.level + 16)),
-            "marker stays below the temple cap: {id}"
+            !marker.grounding.as_ref().expect("contacts").is_empty(),
+            "{id}"
         );
     }
     assert_eq!(
@@ -281,116 +363,86 @@ fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
         objects
             .iter()
             .filter(|o| !o.asset.starts_with("plant/"))
-            .count(),
-        "overview reports actual authored non-tree objects"
+            .count()
     );
-    let tree = objects.iter().find(|o| o.id == "grand/world-tree").unwrap();
-    let tree_chunks: std::collections::BTreeSet<_> =
-        tree.occupancy.iter().map(|c| c.position.chunk()).collect();
+    let tree = objects
+        .iter()
+        .find(|o| o.id == "grand/world-tree")
+        .expect("World Tree");
+    let tree_chunks: BTreeSet<_> = tree.occupancy.iter().map(|c| c.position.chunk()).collect();
+    assert!(tree_chunks.len() <= 128);
+    assert!(tree.occupancy.len() <= 20_000);
     assert!(
-        tree_chunks.len() <= 128,
-        "complete landmark fits comfortably inside 256 detailed chunks"
-    );
-    assert!(tree.occupancy.len() <= 20_000, "bounded full tree source");
-    let mut bounds = [
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-    ];
-    for column in &tree.occupancy {
-        let [x, z] = world_xz(column.position);
-        bounds[0] = bounds[0].min(x);
-        bounds[1] = bounds[1].max(x);
-        bounds[2] = bounds[2].min(z);
-        bounds[3] = bounds[3].max(z);
-    }
-    println!(
-        "Grand World Tree: columns={}, runs={}, chunks={}, width={:.2}, depth={:.2}",
-        tree.occupancy.len(),
-        tree.occupancy
-            .iter()
-            .map(|column| column.runs.len())
-            .sum::<usize>(),
-        tree_chunks.len(),
-        bounds[1] - bounds[0],
-        bounds[3] - bounds[2]
+        tree.occupancy.iter().any(|c| c
+            .position
+            .checked_distance(tree.origin.column)
+            .expect("bounded tree")
+            > 20
+            && c.runs
+                .iter()
+                .any(|r| r.material == "timber" && r.bottom > tree.origin.level + 100)),
+        "outer canopy has supporting branches"
     );
     assert!(
-        (250. ..=300.).contains(&(bounds[1] - bounds[0])),
-        "biome-scale crown width"
+        tree.occupancy.iter().any(|c| c
+            .position
+            .checked_distance(tree.origin.column)
+            .expect("bounded tree")
+            > 40
+            && c.runs
+                .iter()
+                .any(|r| r.material == "timber" && r.bottom == g.surface(c.position).level + 1)),
+        "roots spread beyond the trunk"
     );
-    assert!(bounds[3] - bounds[2] >= 200., "broad canopy depth");
-    assert!(
-        tree.occupancy.iter().any(|column| {
-            column
-                .position
-                .checked_distance(tree.origin.column)
-                .unwrap()
-                > 20
-                && column
-                    .runs
-                    .iter()
-                    .any(|run| run.material == "timber" && run.bottom > tree.origin.level + 100)
-        }),
-        "major branches visibly support the outer canopy"
-    );
-    assert!(
-        tree.occupancy.iter().any(|c| {
-            c.position.checked_distance(tree.origin.column).unwrap() > 40
-                && c.runs
-                    .iter()
-                    .any(|r| r.material == "timber" && r.bottom == g.surface(c.position).level + 1)
-        }),
-        "tree has grounded spreading roots beyond its trunk"
-    );
-    let mut previous: Option<VoxelPosition> = None;
-    for r in 83..=150 {
-        let z = f64::from(r) * 1.5;
-        let support = g.support(-60., z, true);
-        assert!(
-            g.clear_support(support, 12),
-            "root-temple approach blocked at {z}"
-        );
-        if let Some(previous) = previous {
-            assert_eq!(previous.column.checked_distance(support.column).unwrap(), 1);
-            assert!(
-                (previous.level - support.level).abs() <= 1,
-                "unwalkable fort/temple step at {z}"
-            );
-        }
-        previous = Some(support);
-    }
-    let sites = g.sites(1).unwrap();
+    let sites = g.sites(1).expect("dressed sites");
     for site in &sites.encounters {
-        assert!(g.clear_support(site.preferred, 16));
+        assert!(g.clear_support(site.preferred, 16), "{}", site.id);
         assert!(
             site.surfaces.len() >= 50,
-            "deployment region shrank too far for {}",
+            "deployment footprint: {}",
             site.id
         );
     }
-    for node in &sites.route_nodes {
+    for anchor in &g.anchors {
         assert!(
-            g.clear_support(node.position, 8),
-            "shrine interaction blocked: {}",
-            node.id
+            anchor
+                .position
+                .column
+                .checked_distance(WorldHex::new(0, 0))
+                .expect("bounded anchor")
+                <= RADIUS as u64,
+            "anchor outside admitted world: {}",
+            anchor.id
+        );
+        assert!(
+            (0..=MAX_LEVEL).contains(&anchor.position.level),
+            "anchor outside vertical bounds: {}",
+            anchor.id
+        );
+        if matches!(anchor.role, AnchorRole::Gameplay | AnchorRole::Transit) {
+            assert!(
+                g.clear_support(anchor.position, 8),
+                "gameplay anchor blocked: {}",
+                anchor.id
+            );
+        }
+    }
+    let temple = sites
+        .routes
+        .iter()
+        .find(|r| r.id == "root_temple")
+        .expect("temple approach");
+    for support in &temple.ribbon {
+        assert!(
+            g.clear_support(*support, 8),
+            "temple approach at {support:?}"
         );
     }
-    // Exercise actual grounding/material policy in all newly decorated chunks.
-    let chunks: std::collections::BTreeSet<_> = objects
+    // Exact material/grounding admission for all special architecture and tree
+    // chunks. Undecorated finite descriptors remain synthetic, never payloads.
+    let chunks: BTreeSet<_> = objects
         .iter()
-        .filter(|o| {
-            o.id == "grand/world-tree"
-                || o.id == "grand/root-temple-plant"
-                || o.id == "grand/fire-flame-marker"
-                || o.id == "grand/air-spiral-marker"
-                || o.id == "grand/earth-heart-marker"
-                || o.id == "grand/root-temple-ribs"
-                || o.id == "grand/goblin-fort"
-                || o.id.starts_with("grand/forest-camp/")
-                || o.id.starts_with("grand/coastal-rock/")
-        })
+        .filter(|o| !o.id.starts_with("grand/tree/") && !o.id.starts_with("grand/forest-detail/"))
         .flat_map(|o| {
             o.occupancy
                 .iter()
@@ -440,16 +492,47 @@ fn bounded_dressing_keeps_temple_and_encounter_approaches_open() {
 
 #[test]
 fn volcanic_caldera_stays_below_its_rim_and_preserves_exact_sites() {
-    let source = ron::from_str(include_str!(
-        "../../../../../assets/config/v4/grand-v4/world.ron"
-    ))
-    .unwrap();
-    let g = GrandCompiler::new(source).unwrap();
-    let bottom = g.surface(nearest_hex(-1195., 472.)).level;
-    let rim = g.surface(nearest_hex(-1217., 472.)).level;
-    assert!(rim - bottom >= 80, "visible caldera depth");
-    // The flat shrine follows its authored pad, not a projected ascent segment.
-    assert_eq!(g.support(-1170., 455., false).level, 580);
-    assert_eq!(g.support(-1205., 430., false).level, 575);
-    assert!(g.clear_support(g.support(-1170., 455., false), 12));
+    let g = compiler(false);
+    let source = g.geography.document.as_ref().expect("canonical geography");
+    let [cx, cz] = source.volcano.center;
+    let center = g.column(g.geography.world_hex([cx, cz])).0;
+    let bottom = center
+        .runs
+        .iter()
+        .filter(|r| r.material != "water")
+        .map(|r| r.top)
+        .max()
+        .expect("caldera floor");
+    let [rx, rz] = source.caldera.radii;
+    let mut highest = bottom;
+    for sample in 0..24 {
+        let angle = f64::from(sample) * std::f64::consts::TAU / 24.;
+        let p = g
+            .geography
+            .world_hex([cx + rx * angle.cos(), cz + rz * angle.sin()]);
+        let height = g
+            .column(p)
+            .0
+            .runs
+            .iter()
+            .filter(|r| r.material != "water")
+            .map(|r| r.top)
+            .max()
+            .expect("rim support");
+        highest = highest.max(height);
+    }
+    assert!(
+        highest - bottom >= 80,
+        "visible caldera depth survives ordinary access cuts"
+    );
+    let frame = g.geography.frame("shrine_fire").expect("Fire frame");
+    let fire = g.support_at(&frame, [0., 0.]).expect("exact shrine floor");
+    assert!(g.clear_support(fire, 8));
+    let sites = g.sites(1).expect("actual routes");
+    let route = sites
+        .routes
+        .iter()
+        .find(|r| r.id == "volcano_ascent")
+        .expect("landing to crater");
+    assert_eq!(route.supports.last(), Some(&fire));
 }

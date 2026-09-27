@@ -1092,8 +1092,8 @@ mod forest_tests {
         for site in &sites.encounters {
             assert!(g.clear_support(site.preferred, 16), "{}", site.id);
         }
-        for node in &sites.route_nodes {
-            assert!(g.clear_support(node.position, 8), "{}", node.id);
+        for anchor in g.anchors.iter().filter(|a| a.role == AnchorRole::Gameplay) {
+            assert!(g.clear_support(anchor.position, 8), "{}", anchor.id);
         }
     }
 }
