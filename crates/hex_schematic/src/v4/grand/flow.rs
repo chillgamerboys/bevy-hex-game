@@ -92,8 +92,9 @@ impl GrandCompiler {
     }
     /// Establish the complete drainage graph before publishing any chunks.
     /// Greedily choosing the lowest neighbor can strand a branch at a channel
-    /// bend. Processing the monotone chart backwards admits only edges already
-    /// known to reach the intended lake or sea; no phantom Standing sinks remain.
+    /// bend. Reverse breadth-first reachability admits only real nonuphill paths
+    /// to the receiving lake or sea. Receiver distance proves acyclicity; the
+    /// travelling highlight chart is only a tie preference, not fluid topology.
     pub(super) fn compile_r02_flow(
         &self,
     ) -> Result<BTreeMap<WorldHex, VoxelPosition>, ContractError> {
@@ -156,45 +157,65 @@ impl GrandCompiler {
                     }
                 }
             }
-            let mut ordered: Vec<_> = water.values().collect();
-            ordered.sort_by(|a, b| {
-                r02_progress(b.column, b.top).total_cmp(&r02_progress(a.column, a.top))
-            });
-            let mut connected = std::collections::BTreeSet::new();
-            for liquid in ordered {
-                let p = liquid.column;
-                if self.r02_receiver(reach, liquid) {
-                    connected.insert(p);
+            let mut distance = BTreeMap::new();
+            let mut queue = VecDeque::new();
+            for liquid in water.values().filter(|l| self.r02_receiver(reach, l)) {
+                distance.insert(liquid.column, 0_u32);
+                queue.push_back(liquid.column);
+            }
+            while let Some(p) = queue.pop_front() {
+                let (Some(liquid), Some(&steps)) = (water.get(&p), distance.get(&p)) else {
+                    continue;
+                };
+                for (q, r) in DIRS {
+                    let n = WorldHex::new(p.q + q, p.r + r);
+                    if water
+                        .get(&n)
+                        .is_some_and(|upstream| upstream.top >= liquid.top)
+                    {
+                        if let std::collections::btree_map::Entry::Vacant(entry) = distance.entry(n)
+                        {
+                            entry.insert(steps + 1);
+                            queue.push_back(n);
+                        }
+                    }
+                }
+            }
+            for (&p, &steps) in &distance {
+                if steps == 0 {
                     continue;
                 }
+                let Some(liquid) = water.get(&p) else {
+                    continue;
+                };
                 let next = DIRS
                     .into_iter()
                     .map(|(q, r)| WorldHex::new(p.q + q, p.r + r))
-                    .filter(|n| connected.contains(n))
+                    .filter(|n| distance.get(n).is_some_and(|next| *next < steps))
                     .filter_map(|n| water.get(&n))
-                    .filter(|n| {
-                        n.top <= liquid.top
-                            && r02_progress(n.column, n.top) > r02_progress(p, liquid.top)
-                    })
+                    .filter(|n| n.top <= liquid.top)
                     .min_by(|a, b| {
                         a.top.cmp(&b.top).then_with(|| {
                             r02_progress(b.column, b.top).total_cmp(&r02_progress(a.column, a.top))
                         })
-                    });
-                if let Some(next) = next {
-                    out.insert(
-                        p,
-                        VoxelPosition {
-                            column: next.column,
-                            level: next.top - 1,
-                        },
-                    );
-                    connected.insert(p);
-                }
+                    })
+                    .ok_or_else(|| {
+                        ContractError::new(
+                            "grand.flow",
+                            "reachable drainage node lost its successor",
+                        )
+                    })?;
+                out.insert(
+                    p,
+                    VoxelPosition {
+                        column: next.column,
+                        level: next.top - 1,
+                    },
+                );
             }
             if let Some(liquid) = water
                 .values()
-                .filter(|l| !connected.contains(&l.column))
+                .filter(|l| !distance.contains_key(&l.column))
                 .max_by(|a, b| {
                     r02_progress(a.column, a.top).total_cmp(&r02_progress(b.column, b.top))
                 })
@@ -206,7 +227,7 @@ impl GrandCompiler {
                         (
                             p,
                             self.column(p).1.map(|l| l.top),
-                            connected.contains(&p),
+                            distance.contains_key(&p),
                             water.get(&p).is_some_and(|n| {
                                 r02_progress(p, n.top) > r02_progress(liquid.column, liquid.top)
                             }),

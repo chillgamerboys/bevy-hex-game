@@ -20,8 +20,9 @@ struct RiverParameters {
 fn fragment(input: VertexOutput, @builtin(front_facing) front: bool) -> FragmentOutput {
     var pbr = pbr_input_from_standard_material(input, front);
     // The same point has the same phase on a cap and an adjacent falling face.
-    // Authored links increase the horizontal chart and never rise, so this
-    // continuous field advances downstream and downward through lips and bases.
+    // Authored main reaches advance this chart through lips and bases. The
+    // field remains continuous across lateral drainage edges in shallow pools;
+    // it does not claim to follow each individual fluid graph edge.
     let chart = dot(input.world_position.xz, river.direction.xy) - input.world_position.y;
     let phase = chart / river.phase_foam_fall.w + river.direction.z - river.phase_foam_fall.x;
     let wave = 0.5 + 0.5 * sin(6.283185307 * phase);

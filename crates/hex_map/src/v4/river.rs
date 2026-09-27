@@ -236,9 +236,9 @@ mod tests {
                     < 0.000_02
             );
         }
-        // The producer validates that every actual neighbor link advances the
-        // full 3D chart and never rises. A descending westward edge can advance
-        // that chart even though its horizontal component points backwards.
+        // Main-channel progression uses the full 3D chart. Physical drainage
+        // also permits lateral flow at flat bank tips; those edges need not
+        // follow this global highlight direction.
         let mut admitted_directions = 0;
         for (q, r) in [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)] {
             let [x, z] = hex_schematic::v4::northern::world_xz(WorldHex::new(q, r));

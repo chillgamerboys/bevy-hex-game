@@ -122,11 +122,6 @@ fn distance([x, z]: [f64; 2], [ax, az]: [f64; 2], [bx, bz]: [f64; 2]) -> f64 {
     let t = (((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)).clamp(0., 1.);
     (x - ax - t * dx).hypot(z - az - t * dz)
 }
-fn chart(p: WorldHex, top: i32) -> f64 {
-    let [x, z] = world_xz(p);
-    let [dx, dz] = RIVER_PHASE_DIRECTION;
-    x * f64::from(dx) + z * f64::from(dz) - f64::from(top) * LEVEL_HEIGHT
-}
 
 #[test]
 fn all_r02_channel_paths_publish_exact_downhill_edges_and_reach_receiving_water() -> TestResult {
@@ -138,6 +133,24 @@ fn all_r02_channel_paths_publish_exact_downhill_edges_and_reach_receiving_water(
     spec.full_dressing = false;
     spec.geography = Some("geography-r02.json".into());
     let compiler = GrandCompiler::with_geography(spec, serde_json::from_slice(bytes)?, bytes)?;
+    // Travelling shading and physical drainage have different invariants:
+    // lateral circulation at a flat bank tip may oppose the global chart. The
+    // authored main channel must still advance it through every reach and fall.
+    let [dx, dz] = RIVER_PHASE_DIRECTION;
+    for channel in document.channels() {
+        let phase = |[x, y, z]: [f64; 3]| {
+            x * document.transform.horizontal_scale * f64::from(dx)
+                - z * document.transform.horizontal_scale * f64::from(dz)
+                - y * document.transform.vertical_scale
+        };
+        for pair in channel.points.windows(2) {
+            let [a, b] = pair else { continue };
+            assert!(
+                phase(*b) > phase(*a),
+                "main-channel travelling wave reverses"
+            );
+        }
+    }
     let candidates = document.candidates();
     let mut pending: BTreeSet<_> = candidates.iter().map(|p| p.chunk()).collect();
     let mut chunks: BTreeMap<ChunkId, ChunkPackage> = BTreeMap::new();
@@ -199,8 +212,8 @@ fn all_r02_channel_paths_publish_exact_downhill_edges_and_reach_receiving_water(
             assert_eq!(at.checked_distance(next.column)?, 1);
             assert_eq!(next.level, target.top - 1);
             assert!(
-                target.top <= liquid.top && chart(next.column, target.top) > chart(at, liquid.top),
-                "forward downhill graph edge"
+                target.top <= liquid.top,
+                "physical drainage never travels uphill"
             );
             let column = chunks
                 .get(&next.column.chunk())
