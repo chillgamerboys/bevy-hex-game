@@ -29,8 +29,32 @@ camera-motion and whole-candidate validation remain pending.
 Evidence: task work directories `grand-tree-material-study-05-full-strata`,
 `grand-tree-palette-budget-independent-review-01`,
 `grand-terrain-shading-pair-01` and `grand-terrain-shading-independent-pair-01`.
-The next immutable package is dressed04. Dressed03's successful controllers below
-belong to its exact source/package and are not silently reattributed to it.
+Immutable dressed04 now passes strict compilation at `10a6f4d`: package
+`5245408092290693514`, source `8899074575515786247`. All 13,134 chunks and
+3,323,269 terrain columns were compared independently: terrain, liquids, routes,
+sites and all 841 other objects are unchanged. Every full-strata tree column and
+all 89 clipped influences match the source oracle; occupied union/wood/grounding
+remain equal to dressed03. The largest/root chunk is 2,140,322 bytes below the
+unchanged 8 MiB limit. At `325d241`, all three actual-package map tests pass:
+685,688 tree vertices / 1,153,974 indices, four exact garden proxies / 7,024
+vertices, and fresh burrow plus finite-world checkpoint restore. Evidence is in
+`grand-dressed04-package-01`, `grand-dressed04-publication-independent-review-01`
+and `grand-dressed04-map-admission-01`.
+
+Renderer commits `eb6a746` / `325d241` integrate the reviewed shader and default
+Grand activation, with explicit-zero comparison override and no-render-app guard.
+If optional attributes exceed 64 MiB, the completion restores the exact UV0 and
+removes its added attributes, then publishes normal geometry/materials and accepts
+the revisions. There is no missing-chunk, retry-loop or process-exit fallback.
+Six foundation tests, one provenance test and scoped map Clippy pass in the lane;
+new combined captures remain required. The review-only dolly module is compiled
+only with `map-review` and requires an explicit windowless Grand/NW capture. Its
+continuous 240-frame camera sweep samples the one-to-three-pixel transition in
+sixteen images; source review passes, combined execution is pending.
+
+Dressed03's successful controllers below belong to its exact source/package and
+are not silently reattributed to dressed04. Final combined CI, full static/temporal
+review, user visual approval and native play/performance remain pending.
 
 ## September 27 dressed03 checkpoint
 

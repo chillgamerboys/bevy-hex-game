@@ -65,6 +65,14 @@ simulation ticks; reward acquisition and respawn also trigger saves.
   and ordinary sailing momentum are preserved.
 
 Source residency is bounded at 512 chunks and detailed presentation at 256 chunks.
+Grand's distant dry terrain filters subpixel material/normal variation while
+preserving exact geometry and picking. The effect fades between one and three
+projected pixels; close voxels retain their original shading. Objects, water,
+stacked interiors, edits and unreliable coarse samples are excluded. Optional
+attributes are bounded to 64 MiB; an over-budget completion restores its exact
+original attributes and publishes normally. `HEX_GRAND_TERRAIN_SHADING=0` disables
+this presentation for comparisons. This does not correct coarse geometry errors.
+
 The distant World Tree mesh comes from compact authored columns, yields to the
 complete detailed object, and applies persistent removals after edits or restore.
 Ground damage cannot erase the tree. Updating this mesh never pins source chunks;

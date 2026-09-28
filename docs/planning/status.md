@@ -16,14 +16,18 @@ shrines, 127 authored enemies, Shadow-earned teleport, durable resume and shrine
 respawn. The user rejected the earlier terrain and approved a revised composition
 before production rebuilding.
 
-The latest actual package is `compiled-r02-dressed-03`, fingerprint
-`3846754643244866974`, from clean `c56f2f865bd81b7f94d8c5ec6721b29a098b3f7d`.
+The latest actual package is `compiled-r02-dressed-04`, fingerprint
+`5245408092290693514`, compiled from clean `10a6f4df4242ea18320147bddefefb7036cd0a69`.
 Strict compilation passes with 3,323,269 columns, 13,134 chunks and 842 objects
 (including 744 ordinary trees and the World Tree). Mainland and Crystal measure
-6.999775× and 7.005680×. Published tree/shore geometry matches independent source
-measurements, and the broad emitted mainland ground arrays remain unchanged.
+6.999775× and 7.005680×. Whole-package comparison proves all terrain, liquids,
+routes and 841 other objects remain unchanged from dressed03. Only tree foliage
+materials change; its occupied union, wood and grounding remain exact. The largest
+chunk is 2,140,322 bytes below the unchanged 8 MiB bound. Actual tree/garden proxy
+and finite-world edit/checkpoint tests pass at `325d241`: the tree has 685,688
+vertices / 1,153,974 indices under the deliberate 34,000-run budget.
 
-The full controller run passes: land/boat/air restarts retain complete owner state,
+The full controller run on dressed03 / `c56f2f86` passes: land/boat/air restarts retain complete owner state,
 active attacks, partial damage and revisited destruction; three residency circuits
 complete 31 stops; all 14 encounter parties / 127 enemies admit; all 20 ordinary
 walking routes and the separate walk/swim/walk crossing pass. Both sailing routes
@@ -32,13 +36,15 @@ now reach the original wet berth and dry landing: west 39.70 seconds by boat plu
 original landing height and forty settling ticks are unchanged. Historical failed
 receipts remain preserved. These checks do not establish general native movement.
 
-Eight fresh game views show improved tree forks/root space and no recurrence of
-the island camera's lower water cutoff. They also expose a dark upper-facing leaf
-patch and an excessively bright crown leader; a material-only correction is being
-prepared. NW terrain representation differences, uniform distant forest and the
-plain root entrance remain visible. An isolated shading-only experiment is under
-focused validation; no renderer fix has been integrated. The actual geometry stays
-unchanged, and the coarse-height discrepancy remains outside that trial.
+Eight dressed03 game views show improved tree forks/root space and no recurrence
+of the island camera's lower water cutoff. Their foliage color patches prompted
+the integrated full-strata correction; its four source views pass review, and
+new-package game images remain pending. The integrated shading change has a
+matched earlier four-frame comparison: reduced NW fine-face contrast and
+byte-identical close forest pictures. Default activation and exact-attribute
+budget fallback pass focused tests. A review-only moving-camera sweep is prepared
+for combined validation. NW geometry/representation differences, uniform distant
+forest and the plain root entrance remain explicit limitations.
 
 Full static/temporal acceptance, combined CI, native control feel and measured
 performance remain open. This is **not delivered on `dev`**; the hard stop is 50%
