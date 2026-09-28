@@ -32,7 +32,7 @@ struct Completion {
 }
 #[derive(Resource)]
 struct Renderer {
-    shading_failed: bool,
+    shading_budget_fallbacks: usize,
     shading_authority: BTreeMap<ChunkId, BTreeMap<ChunkId, Option<u64>>>,
     shading_metrics: BTreeMap<ChunkId, crate::v4::grand_terrain_shading::Metrics>,
     presenter: TerrainPresenter,
@@ -343,7 +343,6 @@ fn draw(world: &mut World) {
     let center = super::world_hex(hex_core::HexCoord::from_world(interest.position));
     world.resource_scope(|world, state: Mut<StreamedArena>| {
         world.resource_scope(|world, mut renderer: Mut<Renderer>| {
-            if renderer.shading_failed { return; }
             let mut candidates: Vec<_> = state
                 .runtime
                 .resident_chunks()
@@ -376,7 +375,7 @@ fn draw(world: &mut World) {
                 .lock()
                 .ok()
                 .and_then(|r| r.try_recv().ok());
-            if let Some(completion) = completion {
+            if let Some(mut completion) = completion {
                 renderer.active = false;
                 if completion.epoch == renderer.epoch
                     && completion.suppressed_terrain == suppressed
@@ -390,7 +389,7 @@ fn draw(world: &mut World) {
                     )
                 {
                     match completion.prepared {
-                        Ok(prepared) => {
+                        Ok(mut prepared) => {
                             // Every rebuilt neighbor must still represent admitted
                             // current occupancy. Checking only the target lets an
                             // in-flight halo rebuild resurrect a carved neighbor.
@@ -410,14 +409,15 @@ fn draw(world: &mut World) {
                             let retained_bytes:usize=renderer.shading_metrics.iter()
                                 .filter(|(c,_)| !completion.retired.contains(*c) && !completion.shading_metrics.contains_key(*c))
                                 .map(|(_,m)|m.extra_bytes).sum();
-                            let next_bytes=retained_bytes+completion.shading_metrics.values().map(|m|m.extra_bytes).sum::<usize>();
-                            if next_bytes>64*1024*1024 {
-                                error!(next_bytes,"GRAND_TERRAIN_SHADING terminal attribute budget failure; no publication or retry");
-                                renderer.shading_failed=true;
-                                if let Some(mut status)=world.get_resource_mut::<ArenaRenderStatus>() { status.pending_chunks=1; }
-                                world.write_message(AppExit::error());
-                                return;
+                            let original_uv_bytes:usize=completion.shading_metrics.values().map(|m|m.original_uv_bytes).sum();
+                            if let Some(attempted_bytes)=crate::v4::grand_terrain_shading::enforce_budget(
+                                &mut prepared,&mut completion.shading_metrics,retained_bytes,64*1024*1024,
+                            ) {
+                                renderer.shading_budget_fallbacks+=1;
+                                warn!(attempted_bytes,fallbacks=renderer.shading_budget_fallbacks,"GRAND_TERRAIN_SHADING original-material budget fallback; authoritative completion preserved");
                             }
+                            // Backups are dropped by publish, not retained with renderer metrics.
+                            for metrics in completion.shading_metrics.values_mut() { metrics.original_uv_bytes=0; }
                             if valid {
                                 for chunk in &completion.retired {
                                     renderer.presenter.remove(world, *chunk);
@@ -460,7 +460,7 @@ fn draw(world: &mut World) {
                                         let decorated:usize=renderer.shading_metrics.values().map(|m|m.vertices).sum();
                                         let bytes:usize=renderer.shading_metrics.values().map(|m|m.extra_bytes).sum();
                                         let protected:usize=renderer.shading_metrics.values().map(|m|m.protected_triangles).sum();
-                                        info!(eligible,decorated,bytes,protected,chunks=renderer.shading_metrics.len(),"GRAND_TERRAIN_SHADING coverage");
+                                        info!(eligible,decorated,bytes,protected,chunks=renderer.shading_metrics.len(),completion_original_uv_bytes=original_uv_bytes,budget_fallbacks=renderer.shading_budget_fallbacks,"GRAND_TERRAIN_SHADING coverage");
                                     }
                                     for chunk in &completion.retired {
                                         renderer.terrain_edges.remove(chunk);
@@ -809,7 +809,7 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
         }
     }
     Ok(Renderer {
-        shading_failed: false,
+        shading_budget_fallbacks: 0,
         shading_authority: BTreeMap::new(),
         shading_metrics: BTreeMap::new(),
         presenter,

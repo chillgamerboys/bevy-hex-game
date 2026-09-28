@@ -469,3 +469,150 @@ fn macro_target_requires_compatible_natural_material_and_nearby_exterior_top() {
         .id = "moss".into();
     assert!(sample(&map, 0.0, 0.0, Family::Ground).is_some());
 }
+
+fn attributes(prepared: &PreparedChunk) -> Vec<Vec<(bevy::mesh::MeshVertexAttributeId, Vec<u8>)>> {
+    prepared
+        .batches
+        .iter()
+        .filter_map(|b| b.mesh.as_ref())
+        .map(|m| {
+            m.attributes()
+                .map(|(a, v)| (a.id, v.get_bytes().to_vec()))
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn budget_fallback_restores_exact_attributes_and_publishes_replaces_retires_normally() {
+    let p = fixture();
+    let at = WorldHex::new(8, 8);
+    let chunk = p.chunks.get(&at.chunk()).expect("chunk");
+    let map = overview(&p);
+    let facts = chunk
+        .columns
+        .iter()
+        .map(|c| (c.position, c.clone()))
+        .collect();
+    let mut presenter = TerrainPresenter::new(
+        &p.manifest,
+        RenderOrigin {
+            column: at,
+            level: 0,
+        },
+        1.0,
+    )
+    .expect("presenter");
+    let mut world = World::new();
+    world.insert_resource(Enabled);
+    world.init_resource::<Assets<FilterMaterial>>();
+    let mut first = presenter.prepare(chunk, 1).expect("first");
+    let first_metrics =
+        decorate(&mut first, &map, &facts, &BTreeSet::new(), &[]).expect("decorate");
+    let mut first_products = vec![first];
+    let mut first_stats = BTreeMap::from([(at.chunk(), first_metrics)]);
+    assert!(enforce_budget(&mut first_products, &mut first_stats, 0, 64 * 1024 * 1024).is_none());
+    presenter
+        .publish(&mut world, first_products.pop().expect("first product"))
+        .expect("filtered publication");
+    let mesh_count = world.resource::<Assets<Mesh>>().len();
+    assert_eq!(world.resource::<Assets<FilterMaterial>>().len(), 1);
+    let mut second = presenter.prepare(chunk, 2).expect("replacement");
+    for batch in &mut second.batches {
+        if let Some(mesh) = &mut batch.mesh {
+            // Deliberately nonzero and varying: restoration must not invent UV0.
+            let uv: Vec<_> = (0..mesh.count_vertices())
+                .map(|i| {
+                    [
+                        f32::from(u16::try_from(i).expect("fixture count")) * 0.125,
+                        -0.75,
+                    ]
+                })
+                .collect();
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+        }
+    }
+    let original = attributes(&second);
+    let geometry = geometry_snapshot(&second);
+    let records = picking_records(&second);
+    let metrics = decorate(&mut second, &map, &facts, &BTreeSet::new(), &[]).expect("decorate");
+    assert!(metrics.eligible_vertices > 0);
+    assert_eq!(metrics.original_uv_bytes, metrics.vertices * 8);
+    let mut products = vec![second];
+    let mut stats = BTreeMap::from([(at.chunk(), metrics)]);
+    let retained = 4096;
+    assert!(enforce_budget(&mut products, &mut stats, retained, retained).is_some());
+    let restored = products.pop().expect("restored product");
+    assert_eq!(original, attributes(&restored));
+    assert_eq!(geometry, geometry_snapshot(&restored));
+    assert_eq!(records, picking_records(&restored));
+    assert!(restored
+        .batches
+        .iter()
+        .all(|b| !b.shading && b.shading_uv0.is_none()));
+    assert!(stats
+        .values()
+        .all(|m| m.extra_bytes == 0 && m.original_uv_bytes == 0));
+    let receipt = presenter
+        .publish(&mut world, restored)
+        .expect("budget fallback publishes");
+    assert_eq!(receipt.revision, 2);
+    assert_eq!(world.resource::<Assets<Mesh>>().len(), mesh_count);
+    assert_eq!(
+        world
+            .query::<&MeshMaterial3d<FilterMaterial>>()
+            .iter(&world)
+            .count(),
+        0
+    );
+    // Accepting the original revision is idempotent, with no budget retry request.
+    let repeated = presenter
+        .publish(
+            &mut world,
+            presenter.prepare(chunk, 2).expect("same revision"),
+        )
+        .expect("idempotent");
+    assert_eq!(receipt.root, repeated.root);
+    presenter.remove(&mut world, at.chunk()).expect("retire");
+    assert!(world.resource::<Assets<Mesh>>().is_empty());
+    presenter.clear(&mut world);
+    assert!(world.resource::<Assets<FilterMaterial>>().is_empty());
+    assert!(world.resource::<Assets<StandardMaterial>>().is_empty());
+}
+
+#[test]
+fn default_selection_leaves_headless_and_non_grand_preparation_unchanged() {
+    assert!(selected(None));
+    assert!(selected(Some("1")));
+    assert!(!selected(Some("0")));
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    install(&mut app);
+    app.update();
+    assert!(!app.world().contains_resource::<Enabled>());
+    assert!(!app.world().contains_resource::<Assets<FilterMaterial>>());
+    let p = fixture();
+    let at = WorldHex::new(8, 8);
+    let chunk = p.chunks.get(&at.chunk()).expect("chunk");
+    let mut map = overview(&p);
+    map.world_id = "northern-test".into();
+    let mut presenter = TerrainPresenter::new(
+        &p.manifest,
+        RenderOrigin {
+            column: at,
+            level: 0,
+        },
+        1.0,
+    )
+    .expect("presenter");
+    let mut prepared = presenter.prepare(chunk, 1).expect("prepare");
+    let before = attributes(&prepared);
+    let metrics =
+        decorate(&mut prepared, &map, &BTreeMap::new(), &BTreeSet::new(), &[]).expect("unaffected");
+    assert_eq!(metrics.extra_bytes, 0);
+    assert_eq!(before, attributes(&prepared));
+    presenter
+        .publish(app.world_mut(), prepared)
+        .expect("ordinary publication needs no shading resources");
+    presenter.clear(app.world_mut());
+}

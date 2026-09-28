@@ -410,7 +410,10 @@ impl TerrainPresenter {
             vertices: 0,
             unresolved_object_assets: prepared.package.semantics.objects.len(),
         };
-        for batch in prepared.batches {
+        for mut batch in prepared.batches {
+            // The accepted mesh keeps only transport attributes; the exact UV0
+            // backup exists solely until the completion budget decision.
+            drop(batch.shading_uv0.take());
             let material = self
                 .materials
                 .entry(batch.substance)

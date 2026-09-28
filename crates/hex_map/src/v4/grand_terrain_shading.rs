@@ -1,4 +1,4 @@
-//! Opt-in, fragment-only Grand terrain filtering. Exact mesh/picking stay intact.
+//! Grand fragment-only terrain filtering. Exact mesh/picking stay intact.
 use super::{PreparedChunk, PresentationError, RunSource};
 use bevy::{
     mesh::VertexAttributeValues,
@@ -25,8 +25,15 @@ pub(crate) type FilterMaterial = ExtendedMaterial<StandardMaterial, Extension>;
 #[derive(Resource)]
 pub(crate) struct Enabled;
 
+fn selected(value: Option<&str>) -> bool {
+    value != Some("0")
+}
+
 pub(crate) fn install(app: &mut App) {
-    if std::env::var("HEX_GRAND_TERRAIN_SHADING").as_deref() == Ok("1") {
+    // Logical/headless apps need neither material resources nor extra systems.
+    if app.get_sub_app(bevy::render::RenderApp).is_some()
+        && selected(std::env::var("HEX_GRAND_TERRAIN_SHADING").ok().as_deref())
+    {
         app.add_plugins(MaterialPlugin::<FilterMaterial>::default())
             .insert_resource(Enabled);
     }
@@ -46,6 +53,7 @@ pub(crate) struct Metrics {
     pub eligible_vertices: usize,
     pub protected_triangles: usize,
     pub extra_bytes: usize,
+    pub original_uv_bytes: usize,
 }
 
 const DIRECTIONS: [(i64, i64); 6] = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)];
@@ -237,7 +245,9 @@ pub(crate) fn decorate(
         let Some(mesh) = &mut batch.mesh else {
             continue;
         };
-        if mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some() {
+        if mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some()
+            || mesh.attribute(Mesh::ATTRIBUTE_UV_1).is_some()
+        {
             continue;
         }
         let Some(VertexAttributeValues::Float32x3(positions)) =
@@ -349,12 +359,54 @@ pub(crate) fn decorate(
         result.vertices += positions.len();
         result.eligible_vertices += eligible;
         result.extra_bytes += positions.len() * 24;
+        batch.shading_uv0 = mesh.attribute(Mesh::ATTRIBUTE_UV_0).cloned();
+        result.original_uv_bytes += batch
+            .shading_uv0
+            .as_ref()
+            .map_or(0, |uv| uv.get_bytes().len());
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, slopes);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
         batch.shading = true;
     }
     Ok(result)
+}
+
+/// Keep optional attributes bounded without rejecting authoritative presentation.
+/// Restored completions publish and accept normally; budget pressure schedules no retry.
+pub(crate) fn enforce_budget(
+    prepared: &mut [PreparedChunk],
+    metrics: &mut BTreeMap<hex_world_contracts::ChunkId, Metrics>,
+    retained_bytes: usize,
+    limit: usize,
+) -> Option<usize> {
+    let attempted = metrics.values().fold(retained_bytes, |bytes, m| {
+        bytes.saturating_add(m.extra_bytes)
+    });
+    if attempted <= limit {
+        return None;
+    }
+    for chunk in prepared {
+        for batch in &mut chunk.batches {
+            if !batch.shading {
+                continue;
+            }
+            if let Some(mesh) = &mut batch.mesh {
+                mesh.remove_attribute(Mesh::ATTRIBUTE_COLOR);
+                mesh.remove_attribute(Mesh::ATTRIBUTE_UV_1);
+                if let Some(original) = batch.shading_uv0.take() {
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, original);
+                } else {
+                    mesh.remove_attribute(Mesh::ATTRIBUTE_UV_0);
+                }
+            }
+            batch.shading = false;
+        }
+    }
+    for metric in metrics.values_mut() {
+        *metric = Metrics::default();
+    }
+    Some(attempted)
 }
 
 #[cfg(test)]

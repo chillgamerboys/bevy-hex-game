@@ -158,6 +158,8 @@ pub struct PreparedChunk {
 
 pub(super) struct PreparedBatch {
     pub shading: bool,
+    // Temporary exact UV0 backup; never retained by the presenter.
+    pub shading_uv0: Option<bevy::mesh::VertexAttributeValues>,
     pub river: Option<super::river::Style>,
     pub substance: SubstanceId,
     pub material: MaterialSpec,
@@ -438,6 +440,7 @@ impl TerrainPreparer {
                 };
                 batches.push(PreparedBatch {
                     shading: false,
+                    shading_uv0: None,
                     river,
                     substance,
                     material: material.clone(),
