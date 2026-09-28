@@ -1,4 +1,6 @@
 //! Northern map presentation consumes compact world facts and gameplay flight state.
+#[cfg(feature = "map-review")]
+mod shading_dolly;
 use super::{environment::UnderwaterTint, ArenaCamera, ArenaFrame, ViewState};
 use bevy::camera::ScalingMode;
 use bevy::core_pipeline::prepass::DepthPrepass;
@@ -46,6 +48,8 @@ pub(super) struct NorthernPresentation {
 struct FlightCue;
 
 pub(super) fn install(app: &mut App) {
+    #[cfg(feature = "map-review")]
+    shading_dolly::install(app);
     hex_map::ocean::install(app);
     app.init_resource::<NorthernPresentation>()
         .add_systems(Startup, spawn_cue)
