@@ -1,5 +1,37 @@
 # Grand V4 integration wave
 
+## Full-palette and terrain-shading candidate preparation
+
+The full-strata World Tree palette restores coherent upper/middle/underside
+colors without changing any occupied interval, timber, grounding, footprint or
+height. It equals the original full-palette study01 object exactly: 16,852 columns,
+32,625 runs and 685,688 proxy vertices. The intermediate compact study04 remains
+banked because its patch rectangles failed source-image review.
+
+The proxy run budget deliberately increases from 25,000 to 34,000; separate
+20,000-column and 750,000-vertex ceilings remain. This retains 1,375 run fragments
+of removal headroom versus 1,189 on dressed03. Independent shared-mesher arithmetic
+estimates an 8.78% increase in isolated detailed vertices, about 2.62 MiB per packed
+mesh copy; source proxy vertices increase 0.53%. These estimates justify measuring
+the new package, not a frame-rate claim. Actual serialized size, publication,
+game images and performance remain acceptance gates.
+
+The default-off terrain-shading trial at `bdf3917` now has a matched four-image
+game comparison on dressed03. Both reviewers find meaningful reduction of the
+northwest fine-face contrast; the close forest off/on PNGs are byte-identical.
+Actual new attributes are 45,886,224 bytes in the northwest view and 25,662,984 in
+the forest view, each across 243 chunks. Exact vertex positions, indices, normals
+and picking remain unchanged. This does not repair coarse-height discrepancies
+or the remaining representation boundary. The bounded production activation
+must preserve normal publication when optional attributes exceed their budget;
+camera-motion and whole-candidate validation remain pending.
+
+Evidence: task work directories `grand-tree-material-study-05-full-strata`,
+`grand-tree-palette-budget-independent-review-01`,
+`grand-terrain-shading-pair-01` and `grand-terrain-shading-independent-pair-01`.
+The next immutable package is dressed04. Dressed03's successful controllers below
+belong to its exact source/package and are not silently reattributed to it.
+
 ## September 27 dressed03 checkpoint
 
 Immutable `compiled-r02-dressed-03` was compiled at clean

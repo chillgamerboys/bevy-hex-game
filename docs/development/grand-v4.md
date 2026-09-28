@@ -68,7 +68,11 @@ Source residency is bounded at 512 chunks and detailed presentation at 256 chunk
 The distant World Tree mesh comes from compact authored columns, yields to the
 complete detailed object, and applies persistent removals after edits or restore.
 Ground damage cannot erase the tree. Updating this mesh never pins source chunks;
-it is bounded to 20,000 columns, 25,000 runs and 750,000 indexed vertices. Revision02
+it is bounded to 20,000 columns, 34,000 runs and 750,000 indexed vertices. The
+full-strata crown uses 32,625 runs and 685,688 proxy vertices. The run budget is an
+explicit operational allowance, not a schema limit: it retains 1,375 interval
+fragments for removals versus 1,189 for the previous crown. The independent column,
+vertex and serialized-chunk bounds remain unchanged. Revision02
 uses the approved tapered trunk, exposed branches, substantial roots and deep
 asymmetric crown. Actual new-package counts and performance remain measured gates;
 the earlier canopy counts do not apply. This presentation is not collision or seabed

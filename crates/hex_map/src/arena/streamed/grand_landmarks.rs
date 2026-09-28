@@ -18,11 +18,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const TREE_ASSET: &str = "plant/grand-world-tree";
 const MAX_COLUMNS: usize = 20_000;
-const MAX_RUNS: usize = 25_000;
-// Grand package 13408690208396973052 uses 15,883 columns / 19,963 runs and
-// 496,932 indexed vertices (853,182 indices); retain a bounded ~20% margin.
-// Approved revision02 tree measures 711,860 indexed vertices; retain a fixed
-// 750k ceiling while its columns/runs stay within the existing 20k/25k budgets.
+const MAX_RUNS: usize = 34_000;
+// The layered crown with full foliage strata uses 16,852 columns / 32,625
+// runs and 685,688 indexed proxy vertices. Bound compact color intervals
+// separately from visible geometry; retain the fixed 20k-column / 750k-vertex
+// limits and a 34k run envelope, including subsequent removal fragments.
 const MAX_VERTICES: usize = 750_000;
 const CORNERS: [Vec3; 6] = [
     Vec3::new(0.0, 0.0, 1.0),

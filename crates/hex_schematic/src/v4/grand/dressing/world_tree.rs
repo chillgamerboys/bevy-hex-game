@@ -177,57 +177,6 @@ fn finalized(g: &GrandCompiler, p: WorldHex, pieces: &[Piece]) -> Vec<VoxelRun> 
     }
     out
 }
-// Connected leaf intervals share broad uneven color regions. A few coherent
-// patches keep full underside/top strata; elsewhere one regional shade avoids
-// splitting every occupied column at both global color planes. This
-// does not collapse separate leaf layers to the highest lobe's column color.
-fn foliage_palette(
-    runs: Vec<VoxelRun>,
-    base: i32,
-    height: f64,
-    east: f64,
-    north: f64,
-) -> Vec<VoxelRun> {
-    let patch = (east * 0.032 + north * 0.017).sin() + 0.6 * (east * 0.013 - north * 0.025).cos();
-    let shade =
-        ((east * 0.11 + north * 0.07).sin() + 0.5 * (east * 0.05 - north * 0.13).cos()) * 0.008;
-    let dark = base + (((0.48 + shade) * height) / LEVEL_HEIGHT).floor() as i32;
-    let light = base + (((0.80 + shade) * height) / LEVEL_HEIGHT).floor() as i32;
-    let mut out = Vec::new();
-    for run in runs {
-        if run.material != "foliage" {
-            out.push(run);
-            continue;
-        }
-        if patch > 0.9 {
-            append(&mut out, run.bottom, run.top.min(dark), "foliage_dark");
-            append(
-                &mut out,
-                run.bottom.max(dark),
-                run.top.min(light),
-                "foliage",
-            );
-            append(&mut out, run.bottom.max(light), run.top, "foliage_light");
-        } else {
-            let low = f64::from(run.bottom - base) * LEVEL_HEIGHT / height;
-            let high = f64::from(run.top - base) * LEVEL_HEIGHT / height;
-            let middle = (low + high) * 0.5;
-            // Lower hanging crowns favor their shaded depths; high spreading
-            // crowns favor their sunlit upper mass. The transition is smooth.
-            let tone = middle + (high - low) * 0.2 * (2. * smooth((middle - 0.55) / 0.2) - 1.);
-            let material = if tone < 0.48 + shade {
-                "foliage_dark"
-            } else if tone > 0.80 + shade {
-                "foliage_light"
-            } else {
-                "foliage"
-            };
-            append(&mut out, run.bottom, run.top, material);
-        }
-    }
-    out
-}
-
 fn segment_distance(east: f64, north: f64, a: [f64; 2], b: [f64; 2]) -> (f64, f64) {
     let [ae, an] = a;
     let [be, bn] = b;
@@ -318,10 +267,24 @@ pub(super) fn compose(g: &GrandCompiler, root: WorldHex) -> Result<ObjectInstanc
                     * smooth((radial.sqrt() * 4.).clamp(0., 1.));
                 let low = (lobe.height * height - extent + ripple * 0.55).max(0.);
                 let high = (lobe.height * height + extent + ripple * 0.80).min(height);
-                // Merge the exact leaf shape before assigning its surface
-                // regions; buried lobe intersections need no palette intervals.
-                if low < high {
-                    piece(&mut parts, base, low, high, "foliage", index);
+                // Shared uneven color strata join overlapping boughs instead of
+                // painting each complete mass or vertical column a separate hue.
+                // Useful lower and upper layers follow the occupied canopy,
+                // rather than reducing the light material to tiny summit tips.
+                let shade = ((east * 0.11 + north * 0.07).sin()
+                    + 0.5 * (east * 0.05 - north * 0.13).cos())
+                    * height
+                    * 0.008;
+                let dark_top = height * 0.48 + shade;
+                let light_bottom = height * 0.80 + shade;
+                for (bottom, top, material) in [
+                    (low, high.min(dark_top), "foliage_dark"),
+                    (low.max(dark_top), high.min(light_bottom), "foliage"),
+                    (low.max(light_bottom), high, "foliage_light"),
+                ] {
+                    if bottom < top {
+                        piece(&mut parts, base, bottom, top, material, index);
+                    }
                 }
             }
             // The bending trunk and fractional contour end each woody column at
@@ -416,7 +379,7 @@ pub(super) fn compose(g: &GrandCompiler, root: WorldHex) -> Result<ObjectInstanc
             if parts.is_empty() {
                 continue;
             }
-            let runs = foliage_palette(finalized(g, p, &parts), base, height, east, north);
+            let runs = finalized(g, p, &parts);
             if runs.is_empty() {
                 continue;
             }
@@ -583,7 +546,7 @@ mod tests {
             tree.occupancy.len() <= 20_000,
             "exact proxy source-column budget"
         );
-        assert!(run_count <= 25_000, "exact proxy compact-run budget");
+        assert!(run_count <= 34_000, "exact proxy compact-run budget");
         assert!(
             vertices <= 750_000,
             "approved bounded exact landmark surface"
