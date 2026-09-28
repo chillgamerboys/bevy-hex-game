@@ -17,6 +17,8 @@ use std::{
 };
 
 struct Completion {
+    shading_authority: BTreeMap<ChunkId, BTreeMap<ChunkId, Option<u64>>>,
+    shading_metrics: BTreeMap<ChunkId, crate::v4::grand_terrain_shading::Metrics>,
     epoch: u64,
     suppressed_terrain: BTreeSet<ChunkId>,
     target: ChunkId,
@@ -30,6 +32,9 @@ struct Completion {
 }
 #[derive(Resource)]
 struct Renderer {
+    shading_failed: bool,
+    shading_authority: BTreeMap<ChunkId, BTreeMap<ChunkId, Option<u64>>>,
+    shading_metrics: BTreeMap<ChunkId, crate::v4::grand_terrain_shading::Metrics>,
     presenter: TerrainPresenter,
     accepted: BTreeMap<ChunkId, u64>,
     visible_objects: BTreeMap<String, BTreeSet<ChunkId>>,
@@ -59,6 +64,7 @@ fn raised_water(run: &VoxelRun, level_height: f32, sea_level: f32) -> bool {
 }
 
 pub(super) fn plugin(app: &mut App) {
+    crate::v4::grand_terrain_shading::install(app);
     app.add_systems(
         PostUpdate,
         draw.before(TransformSystems::Propagate)
@@ -167,6 +173,77 @@ fn merged_visible_runs(
     result
 }
 
+fn visible_object_runs(
+    terrain: &[VoxelRun],
+    object: &[VoxelRun],
+    admitted: &[VoxelRun],
+) -> Vec<VoxelRun> {
+    let surviving = merged_visible_runs(&[], object, admitted);
+    let mut result = Vec::new();
+    for run in surviving {
+        let mut cursor = run.bottom;
+        for ground in terrain
+            .iter()
+            .filter(|g| g.top > run.bottom && g.bottom < run.top)
+        {
+            if cursor < ground.bottom {
+                result.push(VoxelRun {
+                    bottom: cursor,
+                    top: ground.bottom.min(run.top),
+                    material: run.material.clone(),
+                });
+            }
+            cursor = cursor.max(ground.top);
+        }
+        if cursor < run.top {
+            result.push(VoxelRun {
+                bottom: cursor,
+                top: run.top,
+                material: run.material,
+            });
+        }
+    }
+    result
+}
+fn object_provenance(
+    state: &StreamedArena,
+    c: ChunkId,
+    objects: &BTreeMap<String, BTreeSet<ChunkId>>,
+) -> Vec<ColumnData> {
+    let Some(source) = state.runtime.resident_chunk(c) else {
+        return vec![];
+    };
+    let mut admitted = BTreeMap::<_, Vec<VoxelRun>>::new();
+    for influence in &source.package.semantics.object_influences {
+        if objects.contains_key(&influence.id) {
+            for column in &influence.occupancy {
+                admitted
+                    .entry(column.position)
+                    .or_default()
+                    .extend(column.runs.iter().cloned());
+            }
+        }
+    }
+    source
+        .package
+        .columns
+        .iter()
+        .filter_map(|column| {
+            let terrain = state.edits.terrain_column(column.position)?;
+            let object = state.edits.object_column(column.position)?;
+            let runs = visible_object_runs(
+                &terrain.runs,
+                &object.runs,
+                admitted.get(&column.position).map_or(&[], Vec::as_slice),
+            );
+            (!runs.is_empty()).then_some(ColumnData {
+                position: column.position,
+                runs,
+            })
+        })
+        .collect()
+}
+
 fn visual_package(
     state: &StreamedArena,
     c: ChunkId,
@@ -266,6 +343,7 @@ fn draw(world: &mut World) {
     let center = super::world_hex(hex_core::HexCoord::from_world(interest.position));
     world.resource_scope(|world, state: Mut<StreamedArena>| {
         world.resource_scope(|world, mut renderer: Mut<Renderer>| {
+            if renderer.shading_failed { return; }
             let mut candidates: Vec<_> = state
                 .runtime
                 .resident_chunks()
@@ -302,6 +380,7 @@ fn draw(world: &mut World) {
                 renderer.active = false;
                 if completion.epoch == renderer.epoch
                     && completion.suppressed_terrain == suppressed
+                    && completion.shading_authority.values().all(|facts| facts.iter().all(|(c,r)| current_revision(&state,*c) == *r))
                     && completion.revision.map_or_else(
                         || !desired.contains(&completion.target),
                         |revision| {
@@ -328,6 +407,17 @@ fn draw(world: &mut World) {
                                 }
                                 true
                             });
+                            let retained_bytes:usize=renderer.shading_metrics.iter()
+                                .filter(|(c,_)| !completion.retired.contains(*c) && !completion.shading_metrics.contains_key(*c))
+                                .map(|(_,m)|m.extra_bytes).sum();
+                            let next_bytes=retained_bytes+completion.shading_metrics.values().map(|m|m.extra_bytes).sum::<usize>();
+                            if next_bytes>64*1024*1024 {
+                                error!(next_bytes,"GRAND_TERRAIN_SHADING terminal attribute budget failure; no publication or retry");
+                                renderer.shading_failed=true;
+                                if let Some(mut status)=world.get_resource_mut::<ArenaRenderStatus>() { status.pending_chunks=1; }
+                                world.write_message(AppExit::error());
+                                return;
+                            }
                             if valid {
                                 for chunk in &completion.retired {
                                     renderer.presenter.remove(world, *chunk);
@@ -359,6 +449,19 @@ fn draw(world: &mut World) {
                                 if !failed {
                                     renderer.accepted.extend(published);
                                     renderer.visible_objects = completion.objects;
+                                    for chunk in &completion.retired {
+                                        renderer.shading_metrics.remove(chunk);
+                                        renderer.shading_authority.remove(chunk);
+                                    }
+                                    renderer.shading_authority.extend(completion.shading_authority);
+                                    renderer.shading_metrics.extend(completion.shading_metrics);
+                                    if world.contains_resource::<crate::v4::grand_terrain_shading::Enabled>() {
+                                        let eligible:usize=renderer.shading_metrics.values().map(|m|m.eligible_vertices).sum();
+                                        let decorated:usize=renderer.shading_metrics.values().map(|m|m.vertices).sum();
+                                        let bytes:usize=renderer.shading_metrics.values().map(|m|m.extra_bytes).sum();
+                                        let protected:usize=renderer.shading_metrics.values().map(|m|m.protected_triangles).sum();
+                                        info!(eligible,decorated,bytes,protected,chunks=renderer.shading_metrics.len(),"GRAND_TERRAIN_SHADING coverage");
+                                    }
                                     for chunk in &completion.retired {
                                         renderer.terrain_edges.remove(chunk);
                                     }
@@ -415,7 +518,8 @@ fn draw(world: &mut World) {
                 .copied();
             let changed = candidates
                 .iter()
-                .find(|c| renderer.accepted.get(*c) != state.edits.revision(**c).as_ref())
+                .find(|c| renderer.accepted.get(*c) != state.edits.revision(**c).as_ref()
+                    || renderer.shading_authority.get(*c).is_some_and(|facts| facts.iter().any(|(n,r)| current_revision(&state,*n) != *r)))
                 .copied();
             if let Some(mut status) = world.get_resource_mut::<ArenaRenderStatus>() {
                 status.pending_chunks = usize::from(renderer.active)
@@ -426,7 +530,8 @@ fn draw(world: &mut World) {
                         .count()
                     + candidates
                         .iter()
-                        .filter(|c| renderer.accepted.get(*c) != state.edits.revision(**c).as_ref())
+                        .filter(|c| renderer.accepted.get(*c) != state.edits.revision(**c).as_ref()
+                    || renderer.shading_authority.get(*c).is_some_and(|facts| facts.iter().any(|(n,r)| current_revision(&state,*n) != *r)))
                         .count();
             }
             if renderer.active {
@@ -484,6 +589,11 @@ fn draw(world: &mut World) {
             }
             renderer.publication_revision = renderer.publication_revision.saturating_add(1);
             let render_revision = renderer.publication_revision;
+            let shading=state.overview.world_id == "grand-v4" && world.contains_resource::<crate::v4::grand_terrain_shading::Enabled>();
+            let mut shading_authority=BTreeMap::new();
+            let mut shading_facts=BTreeMap::new();
+            let mut shading_edited=BTreeSet::new();
+            let mut provenance=BTreeMap::new();
             let mut authority = BTreeMap::new();
             let mut edges =
                 BTreeMap::<ChunkId, BTreeMap<hex_world_contracts::WorldHex, f32>>::new();
@@ -504,6 +614,24 @@ fn draw(world: &mut World) {
                     return;
                 };
                 authority.insert(*c, authority_revision);
+                if shading {
+                    provenance.insert(*c, object_provenance(&state,*c,&objects));
+                    shading_authority.insert(*c,std::iter::once(*c).chain(neighbors(*c))
+                        .map(|n|(n,current_revision(&state,n))).collect());
+                    if let Some(source)=state.runtime.resident_chunk(*c) {
+                        for p in source.package.columns.iter().flat_map(|column| {
+                            let at=column.position;
+                            std::iter::once(at).chain(super::grand_water::DIRECTIONS.into_iter()
+                                .filter_map(move |(q,r)|at.checked_add(hex_world_contracts::WorldHex::new(q,r)).ok()))
+                        }) {
+                            if let (Some(fact),Some(_))=(state.edits.terrain_column(p),current_revision(&state,p.chunk())) {
+                                shading_facts.insert(p,fact);
+                                let [bottom,top]=state.overview.level_bounds;
+                                if state.edits.terrain_edited_in_column(p,bottom,top.saturating_add(1)) {shading_edited.insert(p);}
+                            }
+                        }
+                    }
+                }
                 let edge = state
                     .runtime
                     .resident_chunk(*c)
@@ -583,6 +711,7 @@ fn draw(world: &mut World) {
             match std::thread::Builder::new()
                 .name("northern-mesh".into())
                 .spawn(move || {
+                    let mut shading_metrics=BTreeMap::new();
                     let prepared = affected
                         .into_iter()
                         .filter(|c| snapshots.contains_key(c))
@@ -594,18 +723,19 @@ fn draw(world: &mut World) {
                             let halo = context
                                 .render_halo(c, &adjacent)
                                 .map_err(|e| e.to_string())?;
-                            context
-                                .prepare_with_render_halo(
-                                    &own.package,
-                                    own.revision,
-                                    &own.suppression,
-                                    &halo,
-                                )
-                                .map_err(|e| e.to_string())
+                            let mut prepared=context
+                                .prepare_with_render_halo(&own.package, own.revision, &own.suppression, &halo).map_err(|e|e.to_string())?;
+                            if shading {
+                                let metrics=crate::v4::grand_terrain_shading::decorate(&mut prepared,&overview,&shading_facts,&shading_edited,provenance.get(&c).map_or(&[],Vec::as_slice)).map_err(|e|e.to_string())?;
+                                shading_metrics.insert(c,metrics);
+                            }
+                            Ok(prepared)
                         })
                         .collect();
                     let proxies = proxy_updates(&overview, &proxy_edges, &changed_proxies);
                     let _sent = sender.send(Completion {
+                        shading_authority,
+                        shading_metrics,
                         epoch,
                         suppressed_terrain: suppressed,
                         target,
@@ -679,6 +809,9 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
         }
     }
     Ok(Renderer {
+        shading_failed: false,
+        shading_authority: BTreeMap::new(),
+        shading_metrics: BTreeMap::new(),
         presenter,
         accepted: BTreeMap::new(),
         visible_objects: BTreeMap::new(),
@@ -1198,6 +1331,36 @@ mod tests {
             !visible.iter().any(|r| r.bottom <= 6 && r.top > 6),
             "whole-footprint admission must not resurrect a carved cell"
         );
+    }
+
+    #[test]
+    fn shading_object_mask_retains_terrain_precedence_and_live_carves() {
+        let run = |bottom, top, material: &str| VoxelRun {
+            bottom,
+            top,
+            material: material.into(),
+        };
+        let terrain = vec![run(0, 6, "stone"), run(9, 12, "stone")];
+        let source = vec![
+            run(3, 8, "stone"),
+            run(8, 10, "timber"),
+            run(12, 15, "timber"),
+        ];
+        let live = vec![
+            run(3, 7, "stone"),
+            run(8, 10, "timber"),
+            run(12, 15, "timber"),
+        ];
+        assert_eq!(
+            visible_object_runs(&terrain, &live, &source),
+            vec![
+                run(6, 7, "stone"),
+                run(8, 9, "timber"),
+                run(12, 15, "timber")
+            ]
+        );
+        assert!(visible_object_runs(&terrain, &live, &[]).is_empty());
+        assert!(visible_object_runs(&terrain, &[run(6, 7, "changed")], &source).is_empty());
     }
 
     #[test]

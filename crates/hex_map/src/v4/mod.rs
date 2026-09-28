@@ -8,6 +8,7 @@
 //! Authored object assets and interior cutaways are not rendered by this adapter.
 //! The original semantic descriptors remain available through [`crate::v4::TerrainPresenter::package`].
 
+pub(crate) mod grand_terrain_shading;
 mod halo;
 mod prepare;
 mod publish;

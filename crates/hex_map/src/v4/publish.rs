@@ -96,6 +96,7 @@ pub struct TerrainPresenter {
     resident: BTreeMap<ChunkId, PublishedChunk>,
     materials: BTreeMap<SubstanceId, Handle<StandardMaterial>>,
     river_materials: BTreeMap<super::river::Style, Handle<super::river::RiverMaterial>>,
+    shading_materials: BTreeMap<SubstanceId, Handle<super::grand_terrain_shading::FilterMaterial>>,
 }
 
 impl TerrainPresenter {
@@ -165,6 +166,7 @@ impl TerrainPresenter {
             resident: BTreeMap::new(),
             materials: BTreeMap::new(),
             river_materials: BTreeMap::new(),
+            shading_materials: BTreeMap::new(),
         })
     }
 
@@ -247,6 +249,15 @@ impl TerrainPresenter {
         prepared: PreparedChunk,
     ) -> Result<ChunkReceipt, PresentationError> {
         self.validate_publication(&prepared)?;
+        if prepared.batches.iter().any(|batch| batch.shading)
+            && (!world.contains_resource::<super::grand_terrain_shading::Enabled>()
+                || !world
+                    .contains_resource::<Assets<super::grand_terrain_shading::FilterMaterial>>())
+        {
+            return Err(PresentationError(
+                "Grand shading material resources are absent".into(),
+            ));
+        }
         if let Some(old) = self.resident.get(&prepared.coordinate()) {
             if prepared.revision == old.receipt.revision
                 && prepared.suppression_fingerprint == old.receipt.suppression_fingerprint
@@ -344,6 +355,15 @@ impl TerrainPresenter {
             }
         } else {
             self.materials.clear();
+        }
+        if let Some(mut assets) =
+            world.get_resource_mut::<Assets<super::grand_terrain_shading::FilterMaterial>>()
+        {
+            for handle in std::mem::take(&mut self.shading_materials).into_values() {
+                assets.remove(handle.id());
+            }
+        } else {
+            self.shading_materials.clear();
         }
         if let Some(mut assets) = world.get_resource_mut::<Assets<super::river::RiverMaterial>>() {
             for handle in std::mem::take(&mut self.river_materials).into_values() {
@@ -489,6 +509,19 @@ impl TerrainPresenter {
                         );
                     }
                     world.entity_mut(batch_entity).insert(MeshMaterial3d(river));
+                } else if batch.shading
+                    && world.contains_resource::<super::grand_terrain_shading::Enabled>()
+                {
+                    let filtered = self.shading_materials.entry(batch.substance).or_insert_with(|| {
+                        let [r,g,b,a]=batch.material.color;
+                        let mut base=StandardMaterial {base_color: Color::srgba_u8(r,g,b,a),perceptual_roughness:0.9,..Default::default()};
+                        if let Some(finish)=self.dry_finish {finish.apply(&mut base);}
+                        world.resource_mut::<Assets<super::grand_terrain_shading::FilterMaterial>>()
+                            .add(super::grand_terrain_shading::material(base))
+                    }).clone();
+                    world
+                        .entity_mut(batch_entity)
+                        .insert(MeshMaterial3d(filtered));
                 } else {
                     world
                         .entity_mut(batch_entity)

@@ -157,6 +157,7 @@ pub struct PreparedChunk {
 }
 
 pub(super) struct PreparedBatch {
+    pub shading: bool,
     pub river: Option<super::river::Style>,
     pub substance: SubstanceId,
     pub material: MaterialSpec,
@@ -436,6 +437,7 @@ impl TerrainPreparer {
                     )
                 };
                 batches.push(PreparedBatch {
+                    shading: false,
                     river,
                     substance,
                     material: material.clone(),

@@ -14,7 +14,7 @@ fn run(bottom: i32, top: i32, material: &str) -> VoxelRun {
     }
 }
 
-fn fixture(origin: WorldHex) -> WorldPackage {
+pub(super) fn fixture(origin: WorldHex) -> WorldPackage {
     let mut chunks: BTreeMap<ChunkId, ChunkPackage> = BTreeMap::new();
     for q in -1_i64..=1 {
         for r in -1_i64..=1 {
