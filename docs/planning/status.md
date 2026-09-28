@@ -38,13 +38,20 @@ receipts remain preserved. These checks do not establish general native movement
 
 Eight dressed03 game views show improved tree forks/root space and no recurrence
 of the island camera's lower water cutoff. Their foliage color patches prompted
-the integrated full-strata correction; its four source views pass review, and
-new-package game images remain pending. The integrated shading change has a
+the integrated full-strata correction; its four source views pass review. Three
+dressed04 game views at clean `ddd93f1` now show the whole footprint, lakeside tree
+and ground-level root/branch scale, with strong palette bands and forest repetition
+still apparent. This is three of 47 views, not full visual acceptance. The integrated shading change has a
 matched earlier four-frame comparison: reduced NW fine-face contrast and
 byte-identical close forest pictures. Default activation and exact-attribute
-budget fallback pass focused tests. A review-only moving-camera sweep is prepared
-for combined validation. NW geometry/representation differences, uniform distant
-forest and the plain root entrance remain explicit limitations.
+budget fallback pass focused tests. The 16-frame moving-camera sweep completes
+and its projection/capture schedule passes independent validation; closer images
+retain the dominant terrain teeth and reveal a foreground water patch. A measured
+69.10-unit coarse-surface error crosses Crystal's intentional inner wall. A bounded
+canonical-surface repair is being investigated; no terrain flattening is justified.
+NW geometry/representation differences, uniform distant forest and the plain root
+entrance remain explicit limitations. Further builds/captures are held below
+300 MiB free space pending separate cache-cleanup approval.
 
 Full static/temporal acceptance, combined CI, native control feel and measured
 performance remain open. This is **not delivered on `dev`**; the hard stop is 50%

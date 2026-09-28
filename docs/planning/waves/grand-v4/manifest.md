@@ -1,6 +1,46 @@
 # Grand V4 integration wave
 
-## Full-palette and terrain-shading candidate preparation
+## September 27 dressed04 visual checkpoint
+
+At clean `ddd93f1a28a1bf60c83fadb08b6c2461e612ad7c`, formatting, three
+review-camera tests and scoped app Clippy pass. The actual 16-image windowless
+dolly completes with unchanged package/source and a validated continuous capture
+schedule: the measured surface footprint crosses 0.723 to 4.371 pixels and back.
+Retained shading attributes peak at 45,886,224 bytes with no budget fallback.
+Independent inspection confirms a reversible sampled shading transition, but
+large detailed/distant terrain teeth remain in the closer frames. A sharply
+bounded foreground water patch is also visible; its cause remains unassigned.
+Neither the 16-frame sample interval nor this camera-only route establishes FPS,
+absence of single-frame flicker, ordinary traversal or native control feel.
+
+Three further exact-source game stills show the whole footprint, the World Tree
+with the valley lake, and a ground view under its branches. All three complete
+without rebuilding, using production-default shading. Whole trunk/root/crown
+composition is visible in the landmark view, with strong top/side color bands
+and repetitive ordinary crowns still apparent. The ground view establishes local
+root/branch scale, not the whole lake or crown. This is a three-of-47 diagnostic
+subset, not full visual acceptance. Evidence directories are
+`grand-dressed04-app-focus-02`, `grand-dressed04-dolly-validated-02`,
+`grand-shading-dolly-independent-review-02` and
+`grand-dressed04-focused-tree-01` in the task workspace. Original game images
+remain under the full source SHA in `.context/grand-review/`.
+
+A read-only whole-package diagnosis confirms the distant bilinear height field
+bridges Crystal Ascent's intentional inner wall: a measured indexed triangle is
+69.10 units above the canonical low cap. The source cliff preserves the temple
+at the bottom of the ascent; flattening it would damage the authored design.
+The next rendering approach must preserve canonical discontinuities and shared
+boundaries, with measured memory cost. Neither a denser uniform height grid nor
+globally exact distant terrain is an accepted repair. No geography or gameplay
+change follows from this diagnosis. The bounded prototype and proposal remain
+external in `grand-distant-surface-plan-01`.
+
+Disk space is below 300 MiB. Additional builds and the full capture matrix are
+held pending the separately requested obsolete development-cache cleanup. No
+new cleanup is authorized or performed. This is a capacity blocker before the
+50% weekly usage stop, not a completed project or combined CI pass.
+
+## Full-palette and terrain-shading integration
 
 The full-strata World Tree palette restores coherent upper/middle/underside
 colors without changing any occupied interval, timber, grounding, footprint or
@@ -50,7 +90,8 @@ Six foundation tests, one provenance test and scoped map Clippy pass in the lane
 new combined captures remain required. The review-only dolly module is compiled
 only with `map-review` and requires an explicit windowless Grand/NW capture. Its
 continuous 240-frame camera sweep samples the one-to-three-pixel transition in
-sixteen images; source review passes, combined execution is pending.
+sixteen images; source review and combined execution now pass with the visual
+limitations recorded above.
 
 Dressed03's successful controllers below belong to its exact source/package and
 are not silently reattributed to dressed04. Final combined CI, full static/temporal
