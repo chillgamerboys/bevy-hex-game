@@ -16,38 +16,33 @@ shrines, 127 authored enemies, Shadow-earned teleport, durable resume and shrine
 respawn. The user rejected the earlier terrain and approved a revised composition
 before production rebuilding.
 
-The latest actual package is `compiled-r02-dressed-02`, fingerprint
-`16024182847783488117`, from clean `835006d0d7a0dca17d9fff361deade180f022937`.
+The latest actual package is `compiled-r02-dressed-03`, fingerprint
+`3846754643244866974`, from clean `c56f2f865bd81b7f94d8c5ec6721b29a098b3f7d`.
 Strict compilation passes with 3,323,269 columns, 13,134 chunks and 842 objects
 (including 744 ordinary trees and the World Tree). Mainland and Crystal measure
-6.999775× and 7.005680×. Eleven original game views were independently inspected:
-distant garden architecture, root/shore clearing and reverse-tree framing improve;
-the crown is still too filled and rounded, and detailed/coarse terrain seams remain.
-This is not visual acceptance. The island view's lower water cutoff is a separately
-proved camera near-plane issue; its source-only optical retreat is integrated.
+6.999775× and 7.005680×. Published tree/shore geometry matches independent source
+measurements, and the broad emitted mainland ground arrays remain unchanged.
 
-Actual land/boat/air process restarts preserve complete owner state, attacks, partial
-damage and revisited destruction. Three streaming circuits pass (31 stops; peaks
-49 source chunks, 15 detailed chunks, two jobs). All fourteen encounter groups and
-127 stable enemies admit and checkpoint, including the corrected Dragon roost.
-The original walking run passes 19/20, including both river-bank routes and all cave
-routes. Its valley-crossing failure is an object-steering dead end. A separate
-bounded test-driver correction passes that same route, with one side reversal and
-unchanged controller, endpoints and fall limits; the full suite has not yet rerun
-on that source. The separate walk/swim/walk crossing passes.
+The full controller run passes: land/boat/air restarts retain complete owner state,
+active attacks, partial damage and revisited destruction; three residency circuits
+complete 31 stops; all 14 encounter parties / 127 enemies admit; all 20 ordinary
+walking routes and the separate walk/swim/walk crossing pass. Both sailing routes
+now reach the original wet berth and dry landing: west 39.70 seconds by boat plus
+6.93 ashore; bay 67.33 seconds via its offshore bend plus 7.77 ashore. Arrival bounds,
+original landing height and forty settling ticks are unchanged. Historical failed
+receipts remain preserved. These checks do not establish general native movement.
 
-Both sailing-v2 checks fail and remain explicit. Western sailing reaches the wet
-berth in 39.7 simulation seconds, then shore arrival stops at a four-voxel wet/dry
-ledge. The direct bay bearing hits shallow coastal ground; increasing its deadline
-cannot repair that route. Broad grading of the existing landing and an authored
-offshore bay course are being investigated. Neither result is complete island travel.
+Eight fresh game views show improved tree forks/root space and no recurrence of
+the island camera's lower water cutoff. They also expose a dark upper-facing leaf
+patch and an excessively bright crown leader; a material-only correction is being
+prepared. NW terrain representation differences, uniform distant forest and the
+plain root entrance remain visible. An isolated shading-only experiment is under
+focused validation; no renderer fix has been integrated. The actual geometry stays
+unchanged, and the coarse-height discrepancy remains outside that trial.
 
-The original failed runs remain preserved. The next source work is limited to the
-open crown structure, actual terrain-mesh attribution, and usable marine approach.
-Final combined movement/restart checks, dressed presentation, combined CI, native
-control feel and measured performance remain open. This is **not delivered on `dev`**;
-the hard stop is 50% weekly usage consumed. See the
-[candidate guide](../development/grand-v4.md) and
+Full static/temporal acceptance, combined CI, native control feel and measured
+performance remain open. This is **not delivered on `dev`**; the hard stop is 50%
+weekly usage consumed. See the [candidate guide](../development/grand-v4.md) and
 [integration record](waves/grand-v4/manifest.md). Linear reconciliation is unverified
 until the connector is reconnected.
 

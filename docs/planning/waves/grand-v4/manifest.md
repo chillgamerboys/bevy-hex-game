@@ -1,6 +1,58 @@
 # Grand V4 integration wave
 
-## Next dressed candidate: integrated source
+## September 27 dressed03 checkpoint
+
+Immutable `compiled-r02-dressed-03` was compiled at clean
+`c56f2f865bd81b7f94d8c5ec6721b29a098b3f7d`: source `8899074575515786247`,
+package `3846754643244866974`, sites `6901112928784176060`. Strict readback
+passes with 3,323,269 columns, 13,134 chunks and 842 objects; mainland 6.999775×
+and Crystal 7.005680×. Independent publication checks reproduce the complete
+4,370-column shore study and the exact revised World Tree. All existing ascent
+supports and endpoints remain unchanged. The same-domain emitted mainland arrays
+are byte-identical to dressed02: largest ground-only component 479,945, no losses
+or gains. Separate objects are excluded from that broad graph.
+
+The complete controller run passes on this clean source/package. All three
+process-restart modes retain full owner state, active attacks, partial health and
+revisited destruction. All 14 encounter parties / 127 stable enemies admit and
+checkpoint. Three circuits pass at 31 stops within residency limits. All 20
+walking routes pass (9,237.47 measured units), including the formerly blocked
+valley route, both river banks, Crystal/Frozen/garden, separate underground routes
+and volcano ascent. The independent walk/swim/walk crossing also passes.
+
+Both sailing-v3 routes now complete the original wet berth and dry landing.
+West reaches berth in 39.700 simulation seconds, then shore in 6.933 seconds.
+Bay uses the published offshore bend (actual active-boat arrival 7.824 units from
+it, both water samples ready), reaches berth in 67.333 seconds, then shore in
+7.767 seconds. Both retain the 2-unit final bounds, original landing elevation,
+ordinary B/swim/walk controls and forty settled dry ticks. The roughly 45-second
+target is the accessible western departure; bay is reported separately. Historical
+failed walking and marine receipts remain unchanged.
+
+Eight fresh original game frames were captured and inspected at full resolution,
+then as a complete contact sheet. Branch openings, lakeside root space and the
+layered crown now read in-game. The lower front crown's dark upward-facing patch
+and nearly uniform bright leader fail the material presentation criterion; L4 is
+preparing one tree-only material reassignment without shape/physics changes. The
+island frame's old lower sea cutoff is absent after the optical-axis retreat. This
+static result does not close the reported native ocean seam. NW terrain teeth and
+representation transitions, uniform distant forest and the plain root excavation
+remain explicit visual limitations. This focused eight-frame set is not the full
+47-view acceptance matrix or user approval.
+
+Evidence is preserved in task work directories `grand-dressed03-package-01`,
+`grand-dressed03-integration-01`, `grand-dressed03-integration-independent-review-01`,
+`grand-dressed03-publication-independent-review-01`,
+`grand-dressed02-to03-ground-only-v3-01` and `grand-dressed03-static-review-01`.
+The original images are under `.context/grand-review/<full-source-head>/r02-dressed-03-crown-shore`.
+L6's geometry-replacement LOD proposal failed its error guard before implementation.
+One isolated default-off shading-only trial is now in focused validation; it must
+preserve exact geometry/objects/water and cannot claim to fix coarse-height error.
+No renderer remedy has been integrated. Final static/temporal acceptance,
+selector-chosen combined CI, native controls and measured 30-minute performance
+remain open. Stop at 50% weekly account usage consumed.
+
+## Historical source preparation for dressed03
 
 `37037c2` exposes the World Tree forks under unequal crown layers. It preserves
 all original timber, roots, grounding, footprint and height. Exact occupied
