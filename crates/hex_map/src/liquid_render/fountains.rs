@@ -142,6 +142,7 @@ mod tests {
                     (
                         "first".to_owned(),
                         ArenaFountainVolume {
+                            observation_target: None,
                             cells: (2..=4)
                                 .map(|level| TilePos::new(HexCoord::ORIGIN, level))
                                 .collect(),
@@ -150,6 +151,7 @@ mod tests {
                     (
                         "second".to_owned(),
                         ArenaFountainVolume {
+                            observation_target: None,
                             cells: BTreeSet::from([TilePos::new(HexCoord::from_axial(1, 0), 1)]),
                         },
                     ),

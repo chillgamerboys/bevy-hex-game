@@ -56,6 +56,7 @@ fn fixture() -> (
             sites.fountains.insert(
                 format!("{prefix}_fountain_{i:02}"),
                 ArenaFountainVolume {
+                    observation_target: None,
                     cells: [TilePos::new(
                         HexCoord::from_axial(if prefix == "forest" { i } else { i + 10 }, 70),
                         1,

@@ -61,6 +61,9 @@ pub struct ArenaExpeditionRoute {
 /// Exact non-solid water cells occupied by one authored fountain pool.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArenaFountainVolume {
+    /// Optional authored top water voxel required for visual discovery.
+    /// None retains the legacy central-surface heuristic; healing uses all cells.
+    pub observation_target: Option<TilePos>,
     /// Liquid voxel identities, not supporting floors or visual light geometry.
     /// Gameplay tests physical body overlap and owns the one-use healing state.
     pub cells: BTreeSet<TilePos>,

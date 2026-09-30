@@ -463,14 +463,22 @@ impl ArenaSession {
                     .iter()
                     .fold((first, first), |(min, max), p| (min.min(*p), max.max(*p)));
                 let center = (min + max) * 0.5;
-                let point = points
-                    .iter()
-                    .min_by(|a, b| {
-                        a.distance_squared(center)
-                            .total_cmp(&b.distance_squared(center))
-                    })
-                    .copied()
-                    .unwrap_or(first);
+                let point = if let Some(target) = pool.observation_target {
+                    // Invalid authored facts never fall back to a visible rill/edge.
+                    if tops.get(&target.coord) != Some(&target) {
+                        continue;
+                    }
+                    target.coord.to_world(geometry.top(target) + 0.01)
+                } else {
+                    points
+                        .iter()
+                        .min_by(|a, b| {
+                            a.distance_squared(center)
+                                .total_cmp(&b.distance_squared(center))
+                        })
+                        .copied()
+                        .unwrap_or(first)
+                };
                 // A recognizable central surface plus several visible patches admits a
                 // flyover. A single exposed edge behind cover never reveals the pool.
                 let diameter = (max - min).with_y(0.0).length().clamp(1.0, 8.0);

@@ -578,9 +578,13 @@ fn personally_used_fountain_updates_known_state_without_another_sighting() {
     let unused = TilePos::new(HexCoord::from_axial(8, 0), 1);
     let mut sites = ArenaExpeditionSites::default();
     for (name, at) in [("forest_fountain_01", at), ("forest_fountain_02", unused)] {
-        sites
-            .fountains
-            .insert(name.into(), ArenaFountainVolume { cells: [at].into() });
+        sites.fountains.insert(
+            name.into(),
+            ArenaFountainVolume {
+                observation_target: None,
+                cells: [at].into(),
+            },
+        );
         view.liquids.push(ArenaSolidSpan {
             bottom: at,
             top_level: 1,
@@ -636,7 +640,10 @@ fn using_an_undiscovered_fountain_does_not_bypass_visual_acquisition() {
     let mut sites = ArenaExpeditionSites::default();
     sites.fountains.insert(
         "forest_fountain_01".into(),
-        ArenaFountainVolume { cells: [at].into() },
+        ArenaFountainVolume {
+            observation_target: None,
+            cells: [at].into(),
+        },
     );
     session.register_expedition_sites(&sites);
     view.expedition = Some(sites);
@@ -873,9 +880,13 @@ fn fountain_discovery_uses_the_central_exposed_top_not_a_visible_edge() {
     .into_iter()
     .flat_map(|coord| [TilePos::new(coord, 1), TilePos::new(coord, 2)])
     .collect();
-    sites
-        .fountains
-        .insert("forest_fountain_01".into(), ArenaFountainVolume { cells });
+    sites.fountains.insert(
+        "forest_fountain_01".into(),
+        ArenaFountainVolume {
+            observation_target: None,
+            cells,
+        },
+    );
     session.register_expedition_sites(&sites);
     view.expedition = Some(sites);
     let observation = PlayerObservation {
@@ -919,4 +930,113 @@ fn fountain_discovery_uses_the_central_exposed_top_not_a_visible_edge() {
         .discovered_landmarks()
         .iter()
         .any(|landmark| landmark.kind == LandmarkKind::Fountain));
+}
+
+#[test]
+fn authored_fountain_basin_cannot_be_replaced_by_a_visible_descending_rill() {
+    let center = HexCoord::from_axial(4, 0);
+    let target = TilePos::new(center, 2);
+    for authored in [None, Some(target)] {
+        let (mut session, mut view, geometry, observation) = fixture();
+        let mut cells: BTreeSet<_> = [
+            center,
+            HexCoord::from_axial(3, 2),
+            HexCoord::from_axial(5, -2),
+        ]
+        .into_iter()
+        .flat_map(|coord| [TilePos::new(coord, 1), TilePos::new(coord, 2)])
+        .collect();
+        cells.extend(
+            [
+                HexCoord::from_axial(4, 5),
+                HexCoord::from_axial(5, 6),
+                HexCoord::from_axial(6, 7),
+            ]
+            .into_iter()
+            .map(|coord| TilePos::new(coord, 1)),
+        );
+        let mut sites = ArenaExpeditionSites::default();
+        sites.fountains.insert(
+            "forest_fountain_01".into(),
+            ArenaFountainVolume {
+                observation_target: authored,
+                cells,
+            },
+        );
+        session.register_expedition_sites(&sites);
+        view.expedition = Some(sites);
+        let basin = center.to_world(geometry.top(target) + 0.01);
+        let observation = PlayerObservation {
+            direction: (basin - observation.origin).normalize(),
+            ..observation
+        };
+        view.static_spans.push(hex_core::arena::ArenaStaticSpan {
+            bottom: TilePos::new(HexCoord::from_axial(2, 0), 1),
+            top_level: 8,
+            blocks_sight: true,
+            blocks_movement: true,
+            blocks_projectiles: true,
+        });
+        view.revision += 1;
+        view.full_rebuild = true;
+        session.collision.refresh(&view, geometry);
+        assert!(!session.collision.sight_clear(observation.origin, basin));
+        for coord in [
+            HexCoord::from_axial(4, 5),
+            HexCoord::from_axial(5, 6),
+            HexCoord::from_axial(6, 7),
+        ] {
+            assert!(session.collision.sight_clear(
+                observation.origin,
+                coord.to_world(geometry.top(TilePos::new(coord, 1)) + 0.01)
+            ));
+        }
+        sample(&mut session, &view, geometry, observation, 5);
+        let marker = session
+            .discovered_landmarks()
+            .into_iter()
+            .find(|m| m.kind == LandmarkKind::Fountain);
+        if authored.is_none() {
+            assert!(
+                marker
+                    .expect("legacy rill heuristic is the counterexample")
+                    .position
+                    .distance(basin)
+                    > 0.1
+            );
+            continue;
+        }
+        assert!(
+            marker.is_none(),
+            "visible rill cannot reveal an occluded authored basin"
+        );
+        view.static_spans.clear();
+        view.revision += 1;
+        view.full_rebuild = true;
+        session.collision.refresh(&view, geometry);
+        sample(&mut session, &view, geometry, observation, 5);
+        let marker = session
+            .discovered_landmarks()
+            .into_iter()
+            .find(|m| m.kind == LandmarkKind::Fountain)
+            .expect("visible basin");
+        assert!(marker.position.distance(basin) < 0.0001);
+        session.player_knowledge.landmarks.clear();
+        session.player_knowledge.dwell.clear();
+        view.expedition
+            .as_mut()
+            .expect("sites")
+            .fountains
+            .get_mut("forest_fountain_01")
+            .expect("fountain")
+            .observation_target = Some(TilePos::new(center, 1));
+        sample(&mut session, &view, geometry, observation, 5);
+        assert!(
+            !session
+                .discovered_landmarks()
+                .iter()
+                .any(|m| m.kind == LandmarkKind::Fountain),
+            "invalid Some must fail closed instead of falling back to rill"
+        );
+    }
 }

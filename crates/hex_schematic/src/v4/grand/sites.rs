@@ -102,6 +102,8 @@ pub struct Route {
 }
 #[derive(Serialize)]
 pub struct Fountain {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) observation_target: Option<VoxelPosition>,
     pub(super) id: String,
     pub(super) cells: Vec<VoxelPosition>,
 }
@@ -283,6 +285,7 @@ impl GrandCompiler {
             route_nodes,
             routes: vec![],
             fountains: vec![Fountain {
+                observation_target: None,
                 id: "garden_fountain".into(),
                 cells,
             }],

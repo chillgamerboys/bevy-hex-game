@@ -64,6 +64,8 @@ struct Route {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Fountain {
+    #[serde(default)]
+    observation_target: Option<VoxelPosition>,
     id: String,
     cells: Vec<VoxelPosition>,
 }
@@ -214,11 +216,22 @@ fn decode(
         )?;
     }
     for entry in file.fountains {
+        let cells = positions(entry.cells)?;
+        let observation_target = entry.observation_target.map(position).transpose()?;
+        if observation_target.is_some_and(|target| {
+            !cells.contains(&target)
+                || cells
+                    .iter()
+                    .any(|cell| cell.coord == target.coord && cell.level > target.level)
+        }) {
+            return Err("fountain observation target is not a published top water voxel".into());
+        }
         named(
             &mut sites.fountains,
             entry.id,
             ArenaFountainVolume {
-                cells: positions(entry.cells)?,
+                cells,
+                observation_target,
             },
         )?;
     }
@@ -255,6 +268,48 @@ fountains:[(id:"spring",cells:[(column:(q:2,r:0),level:9)])])"#.into()
         assert_eq!(route.supports.first(), sites.route_nodes.get("a"));
         assert_eq!(route.supports.last(), sites.route_nodes.get("b"));
     }
+    #[test]
+    fn fountain_target_defaults_and_admits_only_a_published_top_water_cell() {
+        let original = fixture();
+        assert!(parse(&original)
+            .expect("legacy companion")
+            .fountains
+            .get("spring")
+            .expect("spring")
+            .observation_target
+            .is_none());
+        let with = |target: &str| {
+            original.replace(
+                "id:\"spring\",cells:",
+                &format!("id:\"spring\",observation_target:Some({target}),cells:"),
+            )
+        };
+        let valid = with("(column:(q:2,r:0),level:9)");
+        assert_eq!(
+            parse(&valid)
+                .expect("target")
+                .fountains
+                .get("spring")
+                .expect("spring")
+                .observation_target,
+            Some(TilePos::new(HexCoord::from_axial(2, 0), 9))
+        );
+        for invalid in [
+            with("(column:(q:3,r:0),level:9)"),
+            with("(column:(q:2,r:0),level:8)"),
+            with("(column:(q:999999999999,r:0),level:9)"),
+            valid.replace(
+                "cells:[(column:(q:2,r:0),level:9)]",
+                "cells:[(column:(q:2,r:0),level:9),(column:(q:2,r:0),level:10)]",
+            ),
+        ] {
+            assert!(
+                parse(&invalid).is_err(),
+                "invalid target must not fall back"
+            );
+        }
+    }
+
     #[test]
     fn companion_rejects_version_identity_fingerprint_and_gameplay_fields() {
         for source in [

@@ -178,6 +178,17 @@ pub(super) fn validate(
         if id.is_empty() || fountain.cells.is_empty() {
             return Err(format!("expedition fountain {id} has no liquid volume"));
         }
+        if fountain.observation_target.is_some_and(|target| {
+            !fountain.cells.contains(&target)
+                || fountain
+                    .cells
+                    .iter()
+                    .any(|cell| cell.coord == target.coord && cell.level > target.level)
+        }) {
+            return Err(format!(
+                "expedition fountain {id} has an invalid observation target"
+            ));
+        }
         for at in &fountain.cells {
             if at.coord.distance(HexCoord::ORIGIN) > geometry.radius
                 || at.level < geometry.min_level
@@ -305,6 +316,7 @@ mod tests {
         let (mut view, geometry, substances) = fixture();
         let cell = TilePos::new(HexCoord::from_axial(-5, 0), 9);
         let pool = ArenaFountainVolume {
+            observation_target: None,
             cells: [cell].into(),
         };
         view.expedition
@@ -319,6 +331,22 @@ mod tests {
             substance: substances.id("water").expect("known water"),
         });
         validate(&view, geometry, &substances).expect("world liquid volume");
+        for (target, admitted) in [(cell, true), (TilePos::new(cell.coord, 8), false)] {
+            let mut candidate = view.clone();
+            candidate
+                .expedition
+                .as_mut()
+                .expect("sites")
+                .fountains
+                .get_mut("spring")
+                .expect("spring")
+                .observation_target = Some(target);
+            assert_eq!(
+                validate(&candidate, geometry, &substances).is_ok(),
+                admitted
+            );
+        }
+
         view.expedition
             .as_mut()
             .expect("sites")
@@ -500,7 +528,13 @@ mod tests {
                 .as_mut()
                 .expect("sites")
                 .fountains
-                .insert("spring".into(), ArenaFountainVolume { cells: [at].into() });
+                .insert(
+                    "spring".into(),
+                    ArenaFountainVolume {
+                        observation_target: None,
+                        cells: [at].into(),
+                    },
+                );
             invalid.liquids.push(ArenaSolidSpan {
                 bottom: at,
                 top_level: at.level,
@@ -520,6 +554,7 @@ mod tests {
             .insert(
                 "spring".into(),
                 ArenaFountainVolume {
+                    observation_target: None,
                     cells: [cell].into(),
                 },
             );

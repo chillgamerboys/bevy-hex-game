@@ -201,6 +201,7 @@ fn encounter_and_fountain_metadata_do_not_reveal_markers() {
         fountains: [(
             "hidden_fountain".into(),
             ArenaFountainVolume {
+                observation_target: None,
                 cells: [at.above()].into(),
             },
         )]

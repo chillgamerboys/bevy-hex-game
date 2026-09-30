@@ -282,6 +282,17 @@ fn fountain_south_steps_keep_the_pool_and_open_full_width_entry_and_exit() {
         .iter()
         .find(|f| f.id == "garden_fountain")
         .expect("stable fountain");
+    let target = fountain
+        .observation_target
+        .expect("authored basin sight target");
+    assert_eq!(target.column, basin.column);
+    assert_eq!(target.level + 1, water_top);
+    assert!(fountain.cells.contains(&target));
+    assert!(!fountain
+        .cells
+        .iter()
+        .any(|cell| cell.column == target.column && cell.level > target.level));
+
     for (&p, &(_, water)) in &opening {
         if let Some((lo, hi)) = water {
             for level in lo..hi {

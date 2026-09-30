@@ -313,6 +313,13 @@ impl GrandCompiler {
         }
         cells.sort();
         cells.dedup();
+        // The rill shares healing water, but does not define the basin landmark.
+        let observation_target = cells
+            .iter()
+            .filter(|cell| cell.column == center)
+            .max_by_key(|cell| cell.level)
+            .copied()
+            .ok_or_else(|| ContractError::new("grand.fountain", "basin has no water surface"))?;
         Ok(GrandSites {
             version: 1,
             world_id: self.source.id.clone(),
@@ -321,6 +328,7 @@ impl GrandCompiler {
             route_nodes,
             routes,
             fountains: vec![Fountain {
+                observation_target: Some(observation_target),
                 id: "garden_fountain".into(),
                 cells,
             }],
