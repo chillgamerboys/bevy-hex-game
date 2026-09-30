@@ -571,3 +571,124 @@ fn snapshot_reports_retained_products_and_edit_fallback_then_disappears_on_clear
     clear(&mut world);
     assert!(surface_sample_snapshot(&world).is_none());
 }
+
+fn expanded_attributes(mesh: &Mesh) -> Vec<[u32; 10]> {
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        panic!("positions")
+    };
+    let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+    else {
+        panic!("normals")
+    };
+    let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+    else {
+        panic!("colors")
+    };
+    mesh.indices()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            let p = *positions.get(i).expect("indexed position");
+            let n = *normals.get(i).expect("indexed normal");
+            let c = *colors.get(i).expect("indexed color");
+            let mut result = [0; 10];
+            for (out, value) in result.iter_mut().zip(p.into_iter().chain(n).chain(c)) {
+                *out = value.to_bits();
+            }
+            result
+        })
+        .collect()
+}
+
+#[test]
+fn identical_vertex_sharing_preserves_every_indexed_attribute_and_winding() {
+    let (map, runtime, edits) = fixture();
+    let source = map.terrain_surface.as_ref().unwrap();
+    let builder = SurfaceBuilder::new(
+        source,
+        map.radius,
+        map.level_bounds,
+        &map.materials,
+        f64::from(map.level_height),
+    )
+    .unwrap();
+    let mut saved = 0;
+    for chunk in &source.chunks {
+        let Some(cap) = &chunk.surface else { continue };
+        let original_package = edits.presentation_package(chunk.coordinate).unwrap();
+        let faces = builder
+            .build_faces(chunk.coordinate, cap, MAX_VERTICES)
+            .unwrap();
+        let reference = mesh_with_sharing(&map, &faces, false).unwrap();
+        let shared = mesh(&map, &faces).unwrap();
+        assert_eq!(
+            expanded_attributes(&reference),
+            expanded_attributes(&shared),
+            "each ordered triangle retains exact positions, normals and colors"
+        );
+        assert_eq!(
+            original_package,
+            edits.presentation_package(chunk.coordinate).unwrap()
+        );
+        saved += reference.count_vertices() - shared.count_vertices();
+    }
+    assert!(saved > 0);
+    assert_eq!(runtime.manifest().world_id, "grand-v4");
+}
+
+#[test]
+#[ignore = "Explicit immutable sample-package measurement; no source mutation or GPU"]
+fn actual_sample_sparse_halo_and_shared_vertices_preserve_complete_mesh() {
+    let path = std::path::PathBuf::from(
+        std::env::var("HEX_GRAND_SURFACE_MEASURE_PACKAGE")
+            .expect("explicit immutable sample package"),
+    );
+    let map: NorthernOverview =
+        ron::from_str(&std::fs::read_to_string(path.join("grand-overview.ron")).unwrap()).unwrap();
+    let original = map
+        .terrain_surface
+        .as_ref()
+        .expect("explicit surface payload");
+    let compact = original.compact_halo().unwrap();
+    let old = SurfaceBuilder::new(
+        original,
+        map.radius,
+        map.level_bounds,
+        &map.materials,
+        f64::from(map.level_height),
+    )
+    .unwrap();
+    let new = SurfaceBuilder::new(
+        &compact,
+        map.radius,
+        map.level_bounds,
+        &map.materials,
+        f64::from(map.level_height),
+    )
+    .unwrap();
+    let mut old_vertices = 0;
+    let mut new_vertices = 0;
+    let mut triangles = 0;
+    for chunk in &compact.chunks {
+        let cap = chunk.surface.as_ref().unwrap();
+        let reference_faces = old
+            .build_faces(chunk.coordinate, cap, MAX_VERTICES)
+            .unwrap();
+        let compact_faces = new
+            .build_faces(chunk.coordinate, cap, MAX_VERTICES)
+            .unwrap();
+        assert_eq!(reference_faces, compact_faces);
+        let reference = mesh_with_sharing(&map, &reference_faces, false).unwrap();
+        let shared = mesh(&map, &compact_faces).unwrap();
+        assert_eq!(
+            expanded_attributes(&reference),
+            expanded_attributes(&shared)
+        );
+        old_vertices += reference.count_vertices();
+        new_vertices += shared.count_vertices();
+        triangles += shared.indices().unwrap().len() / 3;
+    }
+    println!("SURFACE_COMPACTION old_blocks={} drawn_blocks={} sparse_halo={} old_columns={} new_columns={} old_vertices={old_vertices} shared_vertices={new_vertices} triangles={triangles} old_bytes={} shared_bytes={} source_fingerprint={} compact_fingerprint={}", original.chunks.len(), compact.chunks.len(), compact.halo.len(), original.chunks.len()*256+original.halo.len(), compact.chunks.len()*256+compact.halo.len(), old_vertices*40+triangles*12, new_vertices*40+triangles*12, original.fingerprint().unwrap(), compact.fingerprint().unwrap());
+}

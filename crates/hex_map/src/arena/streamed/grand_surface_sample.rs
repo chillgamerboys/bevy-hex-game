@@ -367,12 +367,13 @@ fn meshes(
         let faces = builder
             .build_faces(chunk.coordinate, cap, MAX_VERTICES)
             .map_err(|e| e.to_string())?;
-        bytes += faces.vertices * 40 + faces.triangles * 12;
+        let product = mesh(map, &faces)?;
+        bytes += product.count_vertices() * 40 + product.indices().map_or(0, Indices::len) * 4;
         triangles += faces.triangles;
         if bytes > MAX_BYTES {
             return Err("diagnostic surface exceeds 16 MiB aggregate packed buffer budget".into());
         }
-        products.insert(chunk.coordinate, mesh(map, &faces)?);
+        products.insert(chunk.coordinate, product);
     }
     info!(
         bytes,
@@ -383,11 +384,19 @@ fn meshes(
     Ok(products)
 }
 
+fn mesh(map: &NorthernOverview, faces: &SurfaceFaces) -> Result<Mesh, String> {
+    mesh_with_sharing(map, faces, true)
+}
+
 #[expect(
     clippy::cast_possible_truncation,
     reason = "admitted bounded lattice geometry is converted to Bevy f32 only for disposable presentation"
 )]
-fn mesh(map: &NorthernOverview, faces: &SurfaceFaces) -> Result<Mesh, String> {
+fn mesh_with_sharing(
+    map: &NorthernOverview,
+    faces: &SurfaceFaces,
+    share: bool,
+) -> Result<Mesh, String> {
     let palette: Vec<_> = map
         .materials
         .iter()
@@ -400,6 +409,9 @@ fn mesh(map: &NorthernOverview, faces: &SurfaceFaces) -> Result<Mesh, String> {
     let mut normals = Vec::with_capacity(faces.vertices);
     let mut colors = Vec::with_capacity(faces.vertices);
     let mut indices = Vec::with_capacity(faces.triangles * 3);
+    // Exact f32 attribute bits, including signed zero. Never share across a
+    // normal or material/color discontinuity, and never change triangle order.
+    let mut identical = BTreeMap::<[u32; 10], u32>::new();
     for face in &faces.faces {
         let points: Vec<Vec3> = face
             .points
@@ -424,7 +436,7 @@ fn mesh(map: &NorthernOverview, faces: &SurfaceFaces) -> Result<Mesh, String> {
             .ok_or("degenerate surface face")?
             .normalize()
             .to_array();
-        let first = u32::try_from(positions.len()).map_err(|e| e.to_string())?;
+        let mut face_indices = Vec::with_capacity(points.len());
         for point in points {
             let color = if let Some(material) = face.material {
                 *palette
@@ -435,15 +447,45 @@ fn mesh(map: &NorthernOverview, faces: &SurfaceFaces) -> Result<Mesh, String> {
                     .ok_or("macro palette sample missing")?
                     .color
             };
-            positions.push(point.to_array());
-            normals.push(normal);
-            colors.push(color);
+            let position = point.to_array();
+            let mut key = [0; 10];
+            for (target, value) in key
+                .iter_mut()
+                .zip(position.into_iter().chain(normal).chain(color))
+            {
+                *target = value.to_bits();
+            }
+            let index = if let Some(&index) = identical.get(&key).filter(|_| share) {
+                index
+            } else {
+                let index = u32::try_from(positions.len()).map_err(|e| e.to_string())?;
+                positions.push(position);
+                normals.push(normal);
+                colors.push(color);
+                if share {
+                    identical.insert(key, index);
+                }
+                index
+            };
+            face_indices.push(index);
         }
-        for i in 1..face.points.len() - 1 {
-            let offset = u32::try_from(i).map_err(|e| e.to_string())?;
-            indices.extend([first, first + offset, first + offset + 1]);
+        let first = *face_indices.first().ok_or("empty surface face")?;
+        for pair in face_indices
+            .get(1..)
+            .ok_or("missing face indices")?
+            .windows(2)
+        {
+            let [a, b] = pair else {
+                return Err("face index pair".into());
+            };
+            indices.extend([first, *a, *b]);
         }
     }
+    // Capacity reserved for the unshared reference is temporary, not retained
+    // on every published asset after exact attribute reuse.
+    positions.shrink_to_fit();
+    normals.shrink_to_fit();
+    colors.shrink_to_fit();
     Ok(Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
