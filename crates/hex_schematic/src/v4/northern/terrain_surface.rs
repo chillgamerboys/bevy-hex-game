@@ -3,6 +3,9 @@
 //! Profiles retain every solid interval. A macro surface replaces only explicitly
 //! admitted exterior caps; protected columns keep their floors, roofs and voids.
 //! The enclosing manifest binds this entire payload by its canonical fingerprint.
+mod build;
+mod certificate;
+
 use hex_world_contracts::{ChunkId, ContractError, MaterialSpec, VoxelRun, WorldHex, CHUNK_SIZE};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -109,6 +112,51 @@ pub struct TerrainSurfaceOverview {
     pub chunks: Vec<SurfaceChunk>,
 }
 
+/// Validated immutable source index reused by an entire compiler/admission batch.
+/// It performs bounded global validation once; per-patch work never rebuilds the
+/// dictionary lookup or treats missing/malformed profile storage as empty ground.
+pub struct SurfaceBuilder<'a> {
+    source: build::Source<'a>,
+    level_height: f64,
+}
+impl<'a> SurfaceBuilder<'a> {
+    /// Admit complete profiles, finite-domain addresses and the material registry.
+    pub fn new(
+        overview: &'a TerrainSurfaceOverview,
+        radius: u32,
+        levels: [i32; 2],
+        materials: &[MaterialSpec],
+        level_height: f64,
+    ) -> Result<Self, ContractError> {
+        if !level_height.is_finite() || level_height <= 0.0 {
+            return Err(invalid("invalid cap level scale"));
+        }
+        if levels
+            .into_iter()
+            .any(|level| !(f64::from(level) * level_height).is_finite())
+        {
+            return Err(invalid("nonfinite physical profile extent"));
+        }
+        overview.validate_profiles(radius, levels, materials)?;
+        Ok(Self {
+            source: build::Source::new(overview),
+            level_height,
+        })
+    }
+    /// Construct and certify one source-constrained exterior cap patch.
+    pub fn build_patch(&self, coordinate: ChunkId) -> Result<MacroSurface, ContractError> {
+        build::build_patch(&self.source, coordinate, self.level_height)
+    }
+    /// Independently verify exported topology, coverage, canonical seams and error.
+    pub fn certify_patch(
+        &self,
+        coordinate: ChunkId,
+        surface: &MacroSurface,
+    ) -> Result<f64, ContractError> {
+        certificate::certify_patch(&self.source, coordinate, surface, self.level_height)
+    }
+}
+
 fn invalid(message: &str) -> ContractError {
     ContractError::new("terrain_surface", message)
 }
@@ -141,6 +189,7 @@ impl TerrainSurfaceOverview {
         }
         let mut unique_profiles = BTreeSet::new();
         let mut run_count = 0usize;
+        let mut stacked_profiles = Vec::with_capacity(self.profiles.len());
         for profile in &self.profiles {
             run_count = run_count
                 .checked_add(profile.runs.len())
@@ -166,6 +215,12 @@ impl TerrainSurfaceOverview {
             }) {
                 return Err(invalid("profile is overlapping, unordered or uncoalesced"));
             }
+            stacked_profiles.push(
+                profile
+                    .runs
+                    .windows(2)
+                    .any(|pair| matches!(pair,[a,b] if a.top<b.bottom)),
+            );
         }
         let mut previous = None;
         for chunk in &self.chunks {
@@ -195,6 +250,18 @@ impl TerrainSurfaceOverview {
                         && self.profiles.get(usize::from(profile)).is_none())
                 {
                     return Err(invalid("source profile differs from the finite domain"));
+                }
+            }
+            for (&profile, &protection) in chunk.profiles.iter().zip(&chunk.protection) {
+                if stacked_profiles
+                    .get(usize::from(profile))
+                    .copied()
+                    .unwrap_or(false)
+                    && protection & STACKED == 0
+                {
+                    return Err(invalid(
+                        "disconnected solid profile requires exact stacked protection",
+                    ));
                 }
             }
             if let Some(surface) = &chunk.surface {
@@ -359,3 +426,6 @@ mod tests {
         assert!(bad.validate_profiles(64, [0, 100], &materials).is_err());
     }
 }
+
+#[cfg(test)]
+mod build_tests;
