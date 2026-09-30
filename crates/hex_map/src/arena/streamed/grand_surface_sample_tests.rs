@@ -20,6 +20,7 @@ fn fixture() -> (NorthernOverview, WorldRuntime, FiniteWorldSession) {
         },
     ];
     let mut source = TerrainSurfaceOverview {
+        halo: Vec::new(),
         version: 1,
         tolerance: 2.,
         profiles: vec![],
@@ -240,21 +241,57 @@ fn edit(
 }
 
 fn source_profile(source: &TerrainSurfaceOverview, p: WorldHex) -> &SolidProfile {
-    let c = source
-        .chunks
-        .iter()
-        .find(|c| c.coordinate == p.chunk())
-        .unwrap();
-    let i = usize::try_from(p.r.rem_euclid(16) * 16 + p.q.rem_euclid(16)).unwrap();
+    let id = if let Some(c) = source.chunks.iter().find(|c| c.coordinate == p.chunk()) {
+        let i = usize::try_from(p.r.rem_euclid(16) * 16 + p.q.rem_euclid(16)).unwrap();
+        *c.profiles.get(i).expect("source column ID")
+    } else {
+        source
+            .halo
+            .iter()
+            .find(|c| c.column == p)
+            .expect("sparse halo fact")
+            .profile
+    };
     source
         .profiles
-        .get(usize::from(*c.profiles.get(i).expect("source column ID")))
+        .get(usize::from(id))
         .expect("source profile")
 }
 
 #[test]
 fn sample_edits_refill_halo_eviction_and_restore_never_revive_original_caps() {
-    let (map, mut runtime, mut edits) = fixture();
+    edit_lifecycle(false);
+}
+
+#[test]
+fn sparse_halo_edits_survive_eviction_and_restore_without_reviving_faces() {
+    edit_lifecycle(true);
+}
+
+fn edit_lifecycle(compact: bool) {
+    let (mut map, mut runtime, mut edits) = fixture();
+    if compact {
+        let original = meshes(&map, &edits).unwrap();
+        map.terrain_surface = Some(
+            map.terrain_surface
+                .as_ref()
+                .unwrap()
+                .compact_halo()
+                .unwrap(),
+        );
+        let compact_meshes = meshes(&map, &edits).unwrap();
+        for (c, mesh) in &original {
+            let other = compact_meshes.get(c).expect("compacted mesh product");
+            assert_eq!(mesh.indices(), other.indices());
+            for attribute in [
+                Mesh::ATTRIBUTE_POSITION,
+                Mesh::ATTRIBUTE_NORMAL,
+                Mesh::ATTRIBUTE_COLOR,
+            ] {
+                assert_eq!(mesh.attribute(attribute), other.attribute(attribute));
+            }
+        }
+    }
     assert!(edited_source(&map, &edits).unwrap().is_none());
     let cut = WorldHex::new(7, 7);
     edit(&mut edits, "remove", cut, 9, None);

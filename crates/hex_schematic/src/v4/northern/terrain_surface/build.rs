@@ -15,33 +15,43 @@ type Edge = [[i16; 2]; 2];
 pub(super) struct Source<'a> {
     pub(super) overview: &'a TerrainSurfaceOverview,
     chunks: BTreeMap<ChunkId, &'a SurfaceChunk>,
+    halo: BTreeMap<WorldHex, &'a super::SurfaceHaloColumn>,
 }
 impl<'a> Source<'a> {
     pub(super) fn new(overview: &'a TerrainSurfaceOverview) -> Self {
         Self {
             overview,
             chunks: overview.chunks.iter().map(|c| (c.coordinate, c)).collect(),
+            halo: overview.halo.iter().map(|c| (c.column, c)).collect(),
         }
     }
     fn known(&self, column: WorldHex) -> bool {
         self.chunks.contains_key(&ChunkId::from_world_hex(column))
+            || self.halo.contains_key(&column)
+    }
+    pub(super) fn fact(&self, column: WorldHex) -> Result<(u16, u8), ContractError> {
+        let coordinate = ChunkId::from_world_hex(column);
+        if let Some(chunk) = self.chunks.get(&coordinate) {
+            let origin = coordinate.origin()?;
+            let index = usize::try_from((column.r - origin.r) * CHUNK_SIZE + column.q - origin.q)
+                .map_err(|error| invalid(&format!("face profile address: {error}")))?;
+            return chunk
+                .profiles
+                .get(index)
+                .copied()
+                .zip(chunk.protection.get(index).copied())
+                .ok_or_else(|| invalid("missing face profile index or protection"));
+        }
+        self.halo
+            .get(&column)
+            .map(|c| (c.profile, c.protection))
+            .ok_or_else(|| invalid("missing face profile halo"))
     }
     pub(super) fn profile(
         &self,
         column: WorldHex,
     ) -> Result<Option<(&super::SolidProfile, u8)>, ContractError> {
-        let coordinate = ChunkId::from_world_hex(column);
-        let chunk = self
-            .chunks
-            .get(&coordinate)
-            .ok_or_else(|| invalid("missing face profile halo"))?;
-        let origin = coordinate.origin()?;
-        let index = usize::try_from((column.r - origin.r) * CHUNK_SIZE + column.q - origin.q)
-            .map_err(|error| invalid(&format!("face profile address: {error}")))?;
-        let id = *chunk
-            .profiles
-            .get(index)
-            .ok_or_else(|| invalid("missing face profile index"))?;
+        let (id, flags) = self.fact(column)?;
         if id == OUTSIDE_PROFILE {
             return Ok(None);
         }
@@ -50,31 +60,14 @@ impl<'a> Source<'a> {
                 .profiles
                 .get(usize::from(id))
                 .ok_or_else(|| invalid("missing face profile"))?,
-            *chunk
-                .protection
-                .get(index)
-                .ok_or_else(|| invalid("missing face protection"))?,
+            flags,
         )))
     }
     pub(super) fn unprotected_top(&self, column: WorldHex) -> Option<i16> {
-        let coordinate = ChunkId::from_world_hex(column);
-        let chunk = self.chunks.get(&coordinate)?;
-        let origin = coordinate.origin().ok()?;
-        let index =
-            usize::try_from((column.r - origin.r) * CHUNK_SIZE + column.q - origin.q).ok()?;
-        if *chunk.protection.get(index)? != 0 {
-            return None;
-        }
-        let id = *chunk.profiles.get(index)?;
-        if id == OUTSIDE_PROFILE {
-            return None;
-        }
-        self.overview
-            .profiles
-            .get(usize::from(id))?
-            .runs
-            .last()
-            .map(|r| r.top)
+        let (profile, flags) = self.profile(column).ok()??;
+        (flags == 0)
+            .then(|| profile.runs.last().map(|r| r.top))
+            .flatten()
     }
 }
 

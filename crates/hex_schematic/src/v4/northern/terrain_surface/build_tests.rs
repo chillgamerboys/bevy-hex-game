@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 
 fn field(sample: impl Fn(i16, i16) -> (i16, u8)) -> TerrainSurfaceOverview {
     let mut overview = TerrainSurfaceOverview {
+        halo: Vec::new(),
         version: 1,
         tolerance: 2.0,
         profiles: Vec::new(),
@@ -585,4 +586,92 @@ fn actual_crystal_profiles_export_certified_caps_and_exact_interval_faces() {
     )
     .expect("faces write");
     std::fs::write(output.join("receipt.json"), serde_json::to_vec_pretty(&serde_json::json!({"kind":"ACTUAL_SOURCE_CONSTRAINED_CRYSTAL_FACE_EXPORT","package_fingerprint":expected,"source_fingerprint":manifest.source_fingerprint,"source_chunks":source.chunks.len(),"profiles":source.profiles.len(),"patches":receipts,"limits":["No renderer/edit/picking acceptance.","Outer legacy interface remains explicitly unresolved."]})).expect("receipt serialize")).expect("receipt write");
+}
+
+#[test]
+fn sparse_halo_preserves_selected_caps_exact_faces_and_refuses_missing_facts() {
+    let mut original = field(|q, r| {
+        if q.rem_euclid(16) == 0
+            || q.rem_euclid(16) == 15
+            || r.rem_euclid(16) == 0
+            || r.rem_euclid(16) == 15
+        {
+            (80, PATCH_BOUNDARY)
+        } else {
+            (80 + (q + r).rem_euclid(3), 0)
+        }
+    });
+    for coordinate in [ChunkId { q: 0, r: 0 }, ChunkId { q: 1, r: 0 }] {
+        let patch = build(&original, coordinate);
+        original
+            .chunks
+            .iter_mut()
+            .find(|c| c.coordinate == coordinate)
+            .unwrap()
+            .surface = Some(patch);
+    }
+    let compact = original.compact_halo().unwrap();
+    assert_eq!(compact.chunks.len(), 2);
+    assert!(compact.halo.len() < (original.chunks.len() - 2) * 256);
+    assert_eq!(compact.compact_halo().unwrap(), compact);
+    let old = builder(&original).unwrap();
+    let new = builder(&compact).unwrap();
+    for chunk in &compact.chunks {
+        let cap = chunk.surface.as_ref().unwrap();
+        assert_eq!(new.build_patch(chunk.coordinate).unwrap(), *cap);
+        assert_eq!(
+            old.build_faces(chunk.coordinate, cap, 100_000).unwrap(),
+            new.build_faces(chunk.coordinate, cap, 100_000).unwrap()
+        );
+    }
+    let mut missing = compact.clone();
+    missing.halo.remove(0);
+    let checked = builder(&missing).unwrap();
+    assert!(missing.chunks.iter().any(|c| checked
+        .build_faces(c.coordinate, c.surface.as_ref().unwrap(), 100_000)
+        .is_err()));
+    let mut bad = compact.clone();
+    bad.halo.push(*bad.halo.first().unwrap());
+    assert!(builder(&bad).is_err());
+    let mut bad = compact.clone();
+    bad.halo.first_mut().unwrap().column = WorldHex::new(0, 0);
+    assert!(builder(&bad).is_err());
+    let mut bad = compact.clone();
+    bad.halo.first_mut().unwrap().profile = OUTSIDE_PROFILE;
+    assert!(builder(&bad).is_err());
+    let mut bad = compact.clone();
+    bad.halo.first_mut().unwrap().protection = 128;
+    assert!(builder(&bad).is_err());
+    let before = compact.fingerprint().unwrap();
+    let mut changed = compact;
+    changed.halo.first_mut().unwrap().protection |= OBJECT_CONTACT;
+    assert_ne!(before, changed.fingerprint().unwrap());
+}
+
+#[test]
+fn absent_sparse_halo_preserves_original_v1_wire_and_fingerprint() {
+    #[derive(Serialize)]
+    struct Legacy<'a> {
+        version: u32,
+        tolerance: f64,
+        profiles: &'a [SolidProfile],
+        chunks: &'a [SurfaceChunk],
+    }
+    let original = field(|_, _| (80, PATCH_BOUNDARY));
+    let legacy = Legacy {
+        version: original.version,
+        tolerance: original.tolerance,
+        profiles: &original.profiles,
+        chunks: &original.chunks,
+    };
+    let wire = ron::to_string(&legacy).unwrap();
+    assert_eq!(wire, ron::to_string(&original).unwrap());
+    assert_eq!(
+        hex_world_contracts::hash_serializable(&legacy).unwrap(),
+        original.fingerprint().unwrap()
+    );
+    assert_eq!(
+        ron::from_str::<TerrainSurfaceOverview>(&wire).unwrap(),
+        original
+    );
 }

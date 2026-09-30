@@ -307,6 +307,7 @@ mod tests {
         };
         let (mut overview, mut manifest) = fixture(true);
         let surface = TerrainSurfaceOverview {
+            halo: Vec::new(),
             version: 1,
             tolerance: 2.0,
             profiles: Vec::new(),

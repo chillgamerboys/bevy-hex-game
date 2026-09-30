@@ -6,6 +6,7 @@
 mod build;
 mod certificate;
 mod faces;
+mod sparse;
 
 pub use faces::{FaceKind, FacePoint, SurfaceFace, SurfaceFaces};
 
@@ -103,6 +104,18 @@ pub struct SurfaceChunk {
     pub surface: Option<MacroSurface>,
 }
 
+/// One exact source-only neighbor fact, never an independently drawn cap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceHaloColumn {
+    /// Exact world column; ordered, unique and disjoint from complete blocks.
+    pub column: WorldHex,
+    /// Complete solid profile, or the explicit finite-domain outside sentinel.
+    pub profile: u16,
+    /// The same canonical protection bits as a full source block.
+    pub protection: u8,
+}
+
 /// Canonical bounded input to disposable Grand far terrain presentation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,6 +128,10 @@ pub struct TerrainSurfaceOverview {
     pub profiles: Vec<SolidProfile>,
     /// Unique, ordered source chunks; includes the exact one-column query halo.
     pub chunks: Vec<SurfaceChunk>,
+    /// Optional exact one-column halo. Empty preserves the original v1 encoding
+    /// and fingerprint; full blocks and sparse facts share one column budget.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub halo: Vec<SurfaceHaloColumn>,
 }
 
 /// Validated immutable source index reused by an entire compiler/admission batch.
@@ -201,6 +218,7 @@ impl TerrainSurfaceOverview {
             || !(0.0..=2.0).contains(&self.tolerance)
             || self.chunks.len() > MAX_SURFACE_CHUNKS
             || self.profiles.len() > MAX_SOLID_PROFILES
+            || self.halo.len() > MAX_SURFACE_COLUMNS.saturating_sub(self.chunks.len() * 256)
         {
             return Err(invalid("invalid version, tolerance or source budget"));
         }
@@ -318,7 +336,26 @@ impl TerrainSurfaceOverview {
                 }
             }
         }
+        sparse::validate(self, radius, &stacked_profiles)?;
         Ok(())
+    }
+
+    /// Compact source-only blocks to the exact one-column halo needed by the
+    /// already selected patches. This does not select new patches or change any
+    /// profile, protection bit or cap. Validate the result through SurfaceBuilder.
+    pub fn compact_halo(&self) -> Result<Self, ContractError> {
+        sparse::compact(self)
+    }
+
+    /// Storage addresses containing any retained full or sparse source fact.
+    /// Used only for presentation edit revisions, never a residency request.
+    #[must_use]
+    pub fn source_chunks(&self) -> BTreeSet<ChunkId> {
+        self.chunks
+            .iter()
+            .map(|c| c.coordinate)
+            .chain(self.halo.iter().map(|c| ChunkId::from_world_hex(c.column)))
+            .collect()
     }
 
     /// Reconstruct exact admitted runs for disposable face exposure. This never
@@ -361,6 +398,7 @@ mod tests {
             color: [100, 100, 100, 255],
         }];
         let surface = TerrainSurfaceOverview {
+            halo: Vec::new(),
             version: 1,
             tolerance: 2.0,
             profiles: vec![SolidProfile {

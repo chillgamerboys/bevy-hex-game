@@ -52,7 +52,7 @@ pub fn surface_sample_snapshot(world: &World) -> Option<GrandSurfaceSampleSnapsh
         mode: "crystal-four",
         package_fingerprint: state.runtime.manifest().fingerprint,
         source_fingerprint: state.runtime.manifest().source_fingerprint,
-        source_chunks: source.chunks.len(),
+        source_chunks: source.source_chunks().len(),
         selected_chunks: sample.selected.iter().copied().collect(),
         converted_chunks: sample.selected.len(),
         published_chunks: 0,
@@ -188,9 +188,9 @@ fn revisions(
     edits: &FiniteWorldSession,
 ) -> BTreeMap<ChunkId, u64> {
     source
-        .chunks
-        .iter()
-        .map(|c| (c.coordinate, edits.revision(c.coordinate).unwrap_or(0)))
+        .source_chunks()
+        .into_iter()
+        .map(|c| (c, edits.revision(c).unwrap_or(0)))
         .collect()
 }
 
@@ -209,7 +209,10 @@ fn has_edits(
                 )
             })
         })
-    })
+    }) || source
+        .halo
+        .iter()
+        .any(|c| edits.terrain_edited_in_column(c.column, levels[0], levels[1] + 1))
 }
 
 fn edited_source(
@@ -236,29 +239,17 @@ fn edited_source(
     let mut result = source.clone();
     result.profiles.clear();
     let mut intern = BTreeMap::new();
-    for chunk in &mut result.chunks {
-        for (index, (id, flags)) in chunk
+    let profiles = &mut result.profiles;
+    let mut update = |p: WorldHex, id: &mut u16, flags: &mut u8| -> Result<(), String> {
+        if *id == OUTSIDE_PROFILE {
+            return Ok(());
+        }
+        let original = source
             .profiles
-            .iter_mut()
-            .zip(&mut chunk.protection)
-            .enumerate()
-        {
-            if *id == OUTSIDE_PROFILE {
-                continue;
-            }
-            let original = source
-                .profiles
-                .get(usize::from(*id))
-                .ok_or("missing original profile")?;
-            let p = WorldHex::new(
-                chunk.coordinate.q * 16 + i64::try_from(index % 16).map_err(|e| e.to_string())?,
-                chunk.coordinate.r * 16 + i64::try_from(index / 16).map_err(|e| e.to_string())?,
-            );
-            let profile = if edits.terrain_edited_in_column(
-                p,
-                map.level_bounds[0],
-                map.level_bounds[1] + 1,
-            ) {
+            .get(usize::from(*id))
+            .ok_or("missing original profile")?;
+        let profile =
+            if edits.terrain_edited_in_column(p, map.level_bounds[0], map.level_bounds[1] + 1) {
                 let mut runs: Vec<SolidRun> = Vec::new();
                 for level in map.level_bounds[0]..=map.level_bounds[1] {
                     let at = VoxelPosition { column: p, level };
@@ -299,27 +290,41 @@ fn edited_source(
             } else {
                 original.clone()
             };
-            *flags |= PATCH_BOUNDARY;
-            if profile
-                .runs
-                .first()
-                .is_some_and(|r| i32::from(r.bottom) > map.level_bounds[0])
-                || profile.runs.windows(2).any(|p| {
-                    p.first()
-                        .zip(p.get(1))
-                        .is_some_and(|(a, b)| a.top < b.bottom)
-                })
-            {
-                *flags |= STACKED;
-            }
-            *id = if let Some(id) = intern.get(&profile) {
-                *id
-            } else {
-                let id = u16::try_from(result.profiles.len()).map_err(|e| e.to_string())?;
-                intern.insert(profile.clone(), id);
-                result.profiles.push(profile);
-                id
-            };
+        *flags |= PATCH_BOUNDARY;
+        if profile
+            .runs
+            .first()
+            .is_some_and(|r| i32::from(r.bottom) > map.level_bounds[0])
+            || profile.runs.windows(2).any(|p| {
+                p.first()
+                    .zip(p.get(1))
+                    .is_some_and(|(a, b)| a.top < b.bottom)
+            })
+        {
+            *flags |= STACKED;
+        }
+        *id = if let Some(id) = intern.get(&profile) {
+            *id
+        } else {
+            let id = u16::try_from(profiles.len()).map_err(|e| e.to_string())?;
+            intern.insert(profile.clone(), id);
+            profiles.push(profile);
+            id
+        };
+        Ok(())
+    };
+    for chunk in &mut result.chunks {
+        for (index, (id, flags)) in chunk
+            .profiles
+            .iter_mut()
+            .zip(&mut chunk.protection)
+            .enumerate()
+        {
+            let p = WorldHex::new(
+                chunk.coordinate.q * 16 + i64::try_from(index % 16).map_err(|e| e.to_string())?,
+                chunk.coordinate.r * 16 + i64::try_from(index / 16).map_err(|e| e.to_string())?,
+            );
+            update(p, id, flags)?;
         }
         if chunk.surface.is_some() {
             chunk.surface = Some(MacroSurface {
@@ -328,6 +333,9 @@ fn edited_source(
                 maximum_error: 0.0,
             });
         }
+    }
+    for fact in &mut result.halo {
+        update(fact.column, &mut fact.profile, &mut fact.protection)?;
     }
     Ok(Some(result))
 }

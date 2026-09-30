@@ -105,6 +105,7 @@ pub(super) fn compile(g: &GrandCompiler) -> Result<TerrainSurfaceOverview, Contr
         }
     }
     let mut result = TerrainSurfaceOverview {
+        halo: Vec::new(),
         version: 1,
         tolerance: 2.0,
         profiles: vec![],
