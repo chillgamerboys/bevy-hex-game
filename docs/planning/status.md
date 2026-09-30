@@ -16,7 +16,15 @@ shrines, 127 authored enemies, Shadow-earned teleport, durable resume and shrine
 respawn. The user rejected the earlier terrain and approved a revised composition
 before production rebuilding.
 
-The latest actual package is `compiled-r02-dressed-04`, fingerprint
+The latest actual package is `compiled-r02-dressed-05`, fingerprint
+`14587662620600029536`, compiled from clean `91819b4` in 576.62 seconds.
+Strict publication passes with 3,323,269 columns, 13,134 chunks and 842 objects;
+mainland and Crystal remain 6.999775× and 7.005680×. Ten fresh windowless game
+views were individually inspected. Western lower relief improves, but broad upper
+bands and hard distant/detail joins remain visually incomplete. This is a
+diagnostic subset of the 47-view matrix, not visual or controller acceptance.
+
+The preceding actual package is `compiled-r02-dressed-04`, fingerprint
 `5245408092290693514`, compiled from clean `10a6f4df4242ea18320147bddefefb7036cd0a69`.
 Strict compilation passes with 3,323,269 columns, 13,134 chunks and 842 objects
 (including 744 ordinary trees and the World Tree). Mainland and Crystal measure
@@ -58,16 +66,35 @@ The September 29 continuation separates actual authored shapes from the distant
 renderer defect. Unequal western buttresses and a broader hollow are prepared in
 one source candidate; its original compact summit is retained around the library
 and Air route. Complete cave cover and all route ribbons pass, with low ridge-side
-connectivity losses explicitly retained as a tradeoff. This still needs immutable
-package publication and actual game/controller review. A source-backed distant
-surface is being developed separately, retaining cliffs, stacked intervals,
-shore contacts and world edits; no geometry remedy is yet integrated.
+connectivity losses explicitly retained as a tradeoff. Publication and ten game
+views now exist; actual new-package controller review remains open. An audit
+found the new landforms still constrained by an older separate coastline field.
+The next source study derives shore and terrain from one landform field and uses
+a documented 2% design allowance around the approximately 7× mainland target
+(6.86–7.14×), retaining exact independent Crystal and site/route/interior checks.
+The first volcano replacement is rejected: its Fire and Dragon sites disconnect
+from the landing despite removing the artificial spiral shelf.
+
+An optional manifest-bound terrain profile and certified constrained cap builder
+are integrated without renderer activation. Nine builder/profile tests, one
+feature-enabled map admission test and scoped contracts/schematic/map Clippy pass
+in the source lane. Full interval faces, ownership joins, world edits and bounded
+whole-world cost remain separate requirements; no distant geometry repair is yet
+active. The new source signature does not relabel dressed05's exact 918 checkpoint.
 
 The app now retains up to one million engine and wall timing samples each and
 reports observed/dropped counts and elapsed coverage. Three focused timing tests
 pass. Missing biome observations interrupt entry dwell, New Run/Continue clear
 notice state, and five focused biome/boat-transform regressions pass. Actual
 package reset assertions and native orientation remain pending.
+
+The opt-in actual-package fountain harness is integrated. At its named lane head,
+dressed05 passes occlusion, undiscovered-marker absence, ordinary garden ascent,
+visible discovery and the actual map glyph. The last approach fails the unchanged
+walking fall bound at the recessed basin edge; healing/spent/duplicate-use checks
+are unreached. A continuous trace correction awaits rerun. The southern omitted
+rim alone provides no shallow entrance; a small architectural entrance is under
+review, without weakening controller acceptance.
 
 Full static/temporal acceptance, combined CI, native control feel and measured
 performance remain open. This is **not delivered on `dev`**. The current stop is

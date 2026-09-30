@@ -40,8 +40,57 @@ Heavy Cargo/GPU work remains serialized through the shared lock. Focused source
 studies precede immutable package publication and matched game renders. Run the
 47-view matrix, four temporal routes and combined CI after source freeze. Native
 feel/vehicle orientation and full-session 30-minute timing remain separate
-acceptance items; current timing sample caps require correction before such a
-performance claim. Linear reconciliation remains unavailable.
+acceptance items; the new coverage-aware timing record must prove a complete
+active session before any performance claim. Linear reconciliation remains
+unavailable.
+
+### September 29 actual package and next geometry decision
+
+`compiled-r02-dressed-05` strictly publishes at clean `91819b4`: package
+`14587662620600029536`, source `12404478969180693255`, 3,323,269 columns,
+13,134 chunks and 842 objects. The compile/readback takes 576.62 seconds;
+largest chunk 2,140,324 bytes remains below 8 MiB. Mainland/Crystal measure
+6.999775×/7.005680×. All ten requested windowless diagnostic views complete and
+their original images are inspected. The upper western band remains blunt;
+Crystal/falls detailed versus distant geometry remains visibly discontinuous.
+No general traversal, motion, performance or user visual approval follows.
+
+The governing coastline audit finds `coast_reference` still using the earlier
+landform independently of `mountain_envelope`, followed by coast-distance clipping
+of the new low feet. This is inconsistent with the geography-first brief. The
+integration owner authorizes one shared actual-landform coast study and fixes a
+2% design area allowance **before measuring it**, giving 6.86–7.14× the canonical
+93,326-column mainland. This replaces the unnecessarily exact 0.01% outline guard
+for that new authoring policy, not the requirement to measure area. Independent
+Crystal enlargement, water levels, site identities, cave cover, route/body
+clearance and southern valley/bay requirements remain. Failed admission evidence
+must stay failed; it cannot be concealed by changing the policy after measurement.
+Presentation explicitly cedes only the Grand compiler coast/measurement seam to
+the geography writer for this study.
+
+Volcano source03 is preserved as rejected `6dc7fd8`, outside integration: landing
+and berth facts remain, but the landing's ordinary ground component shrinks
+66,243→44,933 and Fire/roost disconnect; the sampled natural ascent has 315 rises
+above one level. Removing the spiral road is insufficient. No full package or
+source gate is justified for that geometry.
+
+`8761cee`/`37a9eb4` integrate optional sealed presentation fingerprints, complete
+solid profiles and a constrained-cap certificate. Nine builder/profile tests and
+one feature-enabled map admission test pass; scoped contracts/schematic/map
+Clippy passes. The earlier wrong-feature invocation is preserved as interrupted,
+not counted. Producer remains `None`, so no renderer behavior changes. The next
+bounded four-chunk Crystal prototype must prove real protected interval faces,
+material clipping and both internal and legacy outer joins before a whole-world
+switch; whole-world memory and edit/publication lifecycle are unresolved.
+
+`540c09b`/`9deb893` add an optional actual-package fountain phase, using production
+observation/map systems and the unchanged garden ascent. Its lane-head dressed05
+run passes five observation/disclosure assertions but fails the final basin
+approach's fall bound. Central healing, spent marker and duplicate use are
+unreached. `3edcd1f` keeps one continuous court-to-water fall trace and awaits
+rerun. Source analysis finds the southern rim gap has no shallow entry; any repair
+must author an entrance and trim liquids consistently, rather than overlap solid
+steps with published fountain water or relax the walking fixture.
 
 ## September 29 focused reliability checkpoint
 
