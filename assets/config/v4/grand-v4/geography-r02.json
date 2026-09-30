@@ -2983,7 +2983,7 @@
     "shore_blend": 180,
     "bodies": [
       {
-        "name": "western-massif-and-crystal",
+        "name": "western-summit-and-rear-ridge",
         "spine": [
           [
             -470,
@@ -2992,26 +2992,131 @@
             210
           ],
           [
-            -300,
-            650,
-            254,
-            310
+            -402,
+            551,
+            290.6,
+            250
+          ],
+          [
+            -350,
+            615,
+            226,
+            160
+          ]
+        ],
+        "lower_slope_power": 1.7,
+        "crest_rounding_radius": 0.35
+      },
+      {
+        "name": "western-descending-buttress",
+        "spine": [
+          [
+            -630,
+            310,
+            55,
+            65
+          ],
+          [
+            -595,
+            350,
+            78,
+            90
+          ],
+          [
+            -555,
+            405,
+            128,
+            110
+          ],
+          [
+            -525,
+            445,
+            210,
+            115
+          ],
+          [
+            -495,
+            470,
+            282,
+            155
+          ]
+        ],
+        "lower_slope_power": 1.7,
+        "crest_rounding_radius": 0.12
+      },
+      {
+        "name": "central-descending-buttress",
+        "spine": [
+          [
+            -330,
+            330,
+            54,
+            65
+          ],
+          [
+            -340,
+            390,
+            82,
+            85
+          ],
+          [
+            -365,
+            445,
+            138,
+            105
+          ],
+          [
+            -395,
+            500,
+            220,
+            145
+          ],
+          [
+            -400,
+            565,
+            247,
+            145
+          ]
+        ],
+        "lower_slope_power": 1.7,
+        "crest_rounding_radius": 0.1
+      },
+      {
+        "name": "western-crystal-saddle",
+        "spine": [
+          [
+            -350,
+            615,
+            226,
+            160
+          ],
+          [
+            -280,
+            675,
+            220,
+            170
+          ],
+          [
+            -205,
+            660,
+            218,
+            165
           ],
           [
             -170,
             570,
             264,
-            300
+            235
           ],
           [
             -120,
             735,
             217,
-            285
+            235
           ]
         ],
         "lower_slope_power": 1.7,
-        "crest_rounding_radius": 0.35
+        "crest_rounding_radius": 0.12
       },
       {
         "name": "frozen-high-saddle",

@@ -88,6 +88,61 @@ fn upper_mountain_schema_rejects_unbounded_authoring_and_keeps_old_documents() {
 }
 
 #[test]
+fn mountain_envelope_accepts_foothill_buttresses_but_rejects_unbounded_shapes() {
+    use super::geography::MountainEnvelope;
+    let canonical: GrandGeographyDocument = serde_json::from_slice(include_bytes!(
+        "../../../../../assets/config/v4/grand-v4/geography-r02.json"
+    ))
+    .expect("canonical geography");
+    assert!(super::GrandGeography::new(canonical.clone()).is_ok());
+    let invalid: [fn(&mut MountainEnvelope); 7] = [
+        |p| p.bodies.resize(13, p.bodies.first().expect("body").clone()),
+        |p| {
+            p.bodies
+                .first_mut()
+                .expect("body")
+                .spine
+                .first_mut()
+                .expect("node")[3] = 0.
+        },
+        |p| {
+            p.bodies
+                .first_mut()
+                .expect("body")
+                .spine
+                .first_mut()
+                .expect("node")[3] = 701.
+        },
+        |p| {
+            p.bodies
+                .first_mut()
+                .expect("body")
+                .spine
+                .first_mut()
+                .expect("node")[2] = -1.
+        },
+        |p| {
+            p.bodies
+                .first_mut()
+                .expect("body")
+                .spine
+                .first_mut()
+                .expect("node")[0] = f64::NAN
+        },
+        |p| p.bodies.first_mut().expect("body").crest_rounding_radius = f64::NAN,
+        |p| {
+            let body = p.bodies.first_mut().expect("body");
+            body.spine = vec![*body.spine.first().expect("node"); 2];
+        },
+    ];
+    for mutate in invalid {
+        let mut document = canonical.clone();
+        mutate(document.mountain_envelope.as_mut().expect("profile"));
+        assert!(super::GrandGeography::new(document).is_err());
+    }
+}
+
+#[test]
 #[ignore = "explicit full-mainland exact source study; no traversal or pixel acceptance"]
 fn export_upper_mountain_source_study() -> Result<(), Box<dyn Error>> {
     export_source_study("upper_bodies")
@@ -103,6 +158,12 @@ fn export_bank_source_study() -> Result<(), Box<dyn Error>> {
 #[ignore = "explicit connected-envelope source study, not game acceptance"]
 fn export_envelope_source_study() -> Result<(), Box<dyn Error>> {
     export_source_study("envelope")
+}
+
+#[test]
+#[ignore = "explicit western composition against a fixed source; no game acceptance"]
+fn export_western_envelope_source_study() -> Result<(), Box<dyn Error>> {
+    export_source_study("western")
 }
 
 #[test]
@@ -174,10 +235,24 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
             baseline.mountain_envelope = None;
             "same candidate document with the shared mountain envelope removed; all other authoring controls retained"
         }
+        "western" => {
+            if std::env::var("HEX_GRAND_STUDY_BASELINE").is_err() {
+                return Err("western composition requires an explicit fixed baseline".into());
+            }
+            "explicit fixed geography source"
+        }
         _ => return Err("unknown source study mode".into()),
     };
+    // Later composition studies compare against an explicit accepted source,
+    // rather than silently treating removal of an older profile as baseline.
+    let definition = if let Ok(path) = std::env::var("HEX_GRAND_STUDY_BASELINE") {
+        baseline = serde_json::from_slice(&fs::read(&path)?)?;
+        format!("explicit fixed geography source: {path}")
+    } else {
+        definition.to_owned()
+    };
     let candidate_bytes = source_bytes.to_vec();
-    let bodies: Vec<(&str, &[[f64; 4]])> = if mode == "envelope" {
+    let bodies: Vec<(&str, &[[f64; 4]])> = if matches!(mode, "envelope" | "western") {
         candidate
             .mountain_envelope
             .as_ref()
@@ -268,6 +343,15 @@ fn export_source_study(mode: &str) -> Result<(), Box<dyn Error>> {
             ("ordinary-reach-through-plunge", [470., 265.], [515., 430.]),
             ("lower-lake-shore", [195., 30.], [355., 145.]),
             ("river-support", [220., -60.], [400., -60.]),
+        ]
+    } else if mode == "western" {
+        [
+            ("western-foot-to-summit", [-470., 150.], [-470., 620.]),
+            ("lower-buttresses-crossing", [-760., 390.], [-220., 390.]),
+            ("upper-buttresses-crossing", [-720., 460.], [-240., 460.]),
+            ("rear-ridge-saddle", [-650., 600.], [0., 600.]),
+            ("summit-to-crystal", [-600., 550.], [0., 550.]),
+            ("frozen-connector", [-100., 550.], [-100., 950.]),
         ]
     } else {
         [

@@ -288,7 +288,7 @@ impl GrandGeographyDocument {
         }
         if self.mountain_envelope.as_ref().is_some_and(|profile| {
             !(100. ..=240.).contains(&profile.shore_blend)
-                || !bounded(profile.bodies.len(), 2, 8)
+                || !bounded(profile.bodies.len(), 2, 12)
                 || profile.bodies.iter().any(|body| {
                     !(1. ..=3.).contains(&body.lower_slope_power)
                         || !(0. ..=0.45).contains(&body.crest_rounding_radius)
@@ -297,8 +297,10 @@ impl GrandGeographyDocument {
                         || !bounded(body.spine.len(), 2, 12)
                         || body.spine.iter().any(|node| {
                             !position([node[0], node[1]])
-                                || !(70. ..=450.).contains(&node[2])
-                                || !(160. ..=700.).contains(&node[3])
+                                // Descending buttresses reach ordinary hills;
+                                // they are not all full-height massif bodies.
+                                || !(30. ..=450.).contains(&node[2])
+                                || !(50. ..=700.).contains(&node[3])
                         })
                         || body.spine.windows(2).any(|nodes| {
                             nodes
