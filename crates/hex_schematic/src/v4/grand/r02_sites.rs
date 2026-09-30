@@ -149,6 +149,23 @@ impl GrandCompiler {
                 role: AnchorRole::Observation,
             });
         }
+        if let Some(entry) = &d.fountain_entry {
+            let frame = self.geography.frame("fountain")?;
+            // Ordinary navigation facts, not knowledge/discovery landmarks.
+            // Keep the authored centre independent of the liquid footprint's
+            // bounding box when the shallow southern shelf is extended.
+            for (id, local) in [
+                ("fountain_entrance", [0., -entry.south_length]),
+                ("fountain_basin", [0., 0.]),
+            ] {
+                out.push(WorldAnchor {
+                    id: format!("grand/anchor/{id}"),
+                    region_id: "grand".into(),
+                    position: self.support_at(&frame, local)?,
+                    role: AnchorRole::Observation,
+                });
+            }
+        }
         // Starting boat position lies just offshore from the authored mainland beach.
         out.push(WorldAnchor {
             id: "grand/anchor/sailing_start".into(),

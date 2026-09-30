@@ -456,6 +456,35 @@ impl Layered {
     }
 }
 impl GrandCompiler {
+    /// The basin's southern stair is terrain authority, so emitted water starts
+    /// above each tread rather than overlapping an object placed in the pool.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Validated entry dimensions bound the nonnegative number of one-voxel risers."
+    )]
+    fn fountain_entry_top(&self, p: WorldHex) -> Option<i32> {
+        let d = self.geography.document.as_ref()?;
+        let entry = d.fountain_entry.as_ref()?;
+        let frame = self.geography.frame("fountain").ok()?;
+        let [east, north] = frame.local(p);
+        if east.abs() > entry.half_width
+            || north < -entry.south_length
+            || north > -entry.central_inset
+        {
+            return None;
+        }
+        // The flowing outlet keeps its original bed and water profile.
+        let (distance, _, _) =
+            geography::route_distance(self.geography.model_xz(p), &d.fountain_rill.points);
+        if distance < d.fountain_rill.width * 0.5 {
+            return None;
+        }
+        let bed = self.geography.top_level(d.fountain_basin.level - 2.);
+        let water = self.geography.top_level(d.fountain_basin.level);
+        let risers = ((-north - entry.central_inset) / entry.tread_depth).ceil() as i32;
+        Some((bed + risers).min(water))
+    }
+
     pub(super) fn r02_surface(&self, p: WorldHex) -> GrandSurface {
         let Some(d) = &self.geography.document else {
             return terrain::surface(self, p);
@@ -469,6 +498,11 @@ impl GrandCompiler {
         if geography::irregular(point, fountain.center, fountain.radii, fountain.phase) < 1. {
             h = fountain.level - 2.;
             water = Some(fountain.level);
+        }
+        let fountain_entry = self.fountain_entry_top(p);
+        if let Some(top) = fountain_entry {
+            h = f64::from(top - d.transform.sea_top) * LEVEL_HEIGHT / d.transform.vertical_scale;
+            water = (top < self.geography.top_level(fountain.level)).then_some(fountain.level);
         }
         let (distance, y, _) = geography::route_distance(point, &d.fountain_rill.points);
         if distance < d.fountain_rill.width * 0.5 {
@@ -529,6 +563,9 @@ impl GrandCompiler {
         if water.is_none() && self.geography.frozen_planting_weight(p) > 0. && h > 180. && h < 255.
         {
             material = "snow";
+        }
+        if fountain_entry.is_some() {
+            material = "sand";
         }
         GrandSurface {
             level: top - 1,
@@ -628,6 +665,9 @@ impl GrandCompiler {
         (ColumnData { position: p, runs }, liquid)
     }
 }
+
+#[cfg(test)]
+mod fountain_tests;
 
 #[cfg(test)]
 mod cave_cover_tests {

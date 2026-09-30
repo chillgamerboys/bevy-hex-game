@@ -1,6 +1,6 @@
 //! One source-owned coordinate frame for the approved revision-02 geography.
 //! Model local coordinates are east/north; runtime north is negative Z.
-use super::{nearest_hex, world_xz, GrandCompiler, LEVEL_HEIGHT, SEA_TOP};
+use super::{GrandCompiler, LEVEL_HEIGHT, SEA_TOP, nearest_hex, world_xz};
 use hex_world_contracts::{ContractError, VoxelPosition, WorldHex};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -66,6 +66,8 @@ pub struct GrandGeographyDocument {
     pub(super) valley_bowl: ValleyBowl,
     pub(super) caldera: Caldera,
     pub(super) fountain_basin: Lake,
+    #[serde(default)]
+    pub(super) fountain_entry: Option<FountainEntry>,
     pub(super) fountain_rill: Watercourse,
     pub(super) review_cameras: BTreeMap<String, Camera>,
 }
@@ -214,6 +216,13 @@ shape!(LandingApron {
     core_radius: f64,
     outer_radius: f64
 });
+// Horizontal model dimensions; the architectural riser is one physical voxel.
+shape!(FountainEntry {
+    half_width: f64,
+    south_length: f64,
+    central_inset: f64,
+    tread_depth: f64
+});
 shape!(FrameSpec {origin:[f64;2],angle:f64,layer:SupportLayer,floor:Option<f64>});
 
 shape!(Landing {
@@ -246,6 +255,22 @@ impl GrandGeographyDocument {
         let bounded = |n: usize, min, max| n >= min && n <= max;
         let radii = |r: [f64; 2]| r.iter().all(|v| v.is_finite() && (1. ..=1500.).contains(v));
         let position = |p: [f64; 2]| p.iter().all(|v| v.is_finite() && v.abs() <= 4000.);
+        if self.fountain_entry.as_ref().is_some_and(|entry| {
+            !(2.5..=4.).contains(&entry.half_width)
+                || !(8. ..=18.).contains(&entry.south_length)
+                || !(0.5..=1.5).contains(&entry.central_inset)
+                || !(1.8..=3.).contains(&entry.tread_depth)
+                || entry.tread_depth * self.transform.horizontal_scale < 3_f64.sqrt()
+                || entry.south_length
+                    < entry.central_inset
+                        + (2. * self.transform.vertical_scale / LEVEL_HEIGHT).ceil()
+                            * entry.tread_depth
+        }) {
+            return Err(ContractError::new(
+                "grand.fountain_entry",
+                "invalid bounded one-voxel southern fountain steps",
+            ));
+        }
         let path = |p: &[[f64; 3]]| {
             bounded(p.len(), 2, 256)
                 && p.iter().all(|v| {

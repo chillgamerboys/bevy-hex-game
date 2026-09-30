@@ -2732,6 +2732,12 @@
     "level": 210,
     "phase": 0
   },
+  "fountain_entry": {
+    "half_width": 3.5,
+    "south_length": 12.0,
+    "central_inset": 1.5,
+    "tread_depth": 2.3
+  },
   "fountain_rill": {
     "width": 3,
     "points": [
