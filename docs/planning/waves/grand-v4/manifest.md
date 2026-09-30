@@ -1,5 +1,48 @@
 # Grand V4 integration wave
 
+## September 29 continuation
+
+The user resumed development with the instruction to finish the task or stop at
+5% usage available, interpreted as 95% weekly usage consumed. This replaces the
+previous 50% stop. Initial account usage is 60%; filesystem free space is about
+23 GiB, so the former capacity blocker has cleared without this task executing
+the pending cache cleanup.
+
+One integration wave and one PR remain. Existing source branches/checkpoints are
+preserved. The approved revision02 geographic relationships remain the contract;
+the September 29 audit confirms final contours were not blanket-approved.
+Long lowland/shore feet are present, but the western upper massif and volcano
+still have artificial authored shapes. The distant renderer separately bridges
+real discontinuities and cannot substitute for a geography correction.
+
+| Continuation lane | Authority and owned paths | Start dependencies | Merge dependencies |
+|---|---|---|---|
+| Geography | world: Grand oracle/profile helpers, geographic authoring JSON and focused geography tests | clean lane based on this integration checkpoint; read-only audit complete | exact source views and whole affected-ground/interior checks; preserve landmark identities, current low feet, water levels and Crystal/Frozen/library connections |
+| Terrain presentation | world: Northern overview presentation schema/export, Grand presentation companion export and streamed render helpers/tests | CPU feasibility/cost study and explicit protected-surface policy; no geometry-authoring edits | complete cap/breakline and shared-boundary checks, bounded whole-world cost, edit/eviction handling and matched game views |
+| Integration and validation | shared: application wiring/review instrumentation, wave/status documentation and external runners | existing gameplay/world contracts; one writer on integration | both source lanes, immutable new package, controller bundle, static/temporal review and complete selector gate |
+
+Geography starts with one western exterior composition trial, changing the
+uniform governing envelope into unequal buttresses and a broad saddle/gully.
+It retains the coast for attribution in that first trial, plus the low feet,
+summit/interior, Crystal well and Frozen connection. The volcano is a separate
+following landform pass. No narrow test-corridor carving or global scale reduction
+is authorized by this continuation.
+
+Presentation first measures simplification of continuous patches with protected
+cliff/opening/shore/contact boundaries. The rejected corner-welding prototype
+remains rejected; denser sampling of the same eight-unit heightfield cannot
+recover missing geometry. Whole cap surfaces and shared edges, not center samples
+alone, must be compared. Physics and detailed picking remain world-authoritative.
+Compiler/presentation schema files have one writer in the presentation lane;
+geographic source/height controls have one writer in the geography lane.
+
+Heavy Cargo/GPU work remains serialized through the shared lock. Focused source
+studies precede immutable package publication and matched game renders. Run the
+47-view matrix, four temporal routes and combined CI after source freeze. Native
+feel/vehicle orientation and full-session 30-minute timing remain separate
+acceptance items; current timing sample caps require correction before such a
+performance claim. Linear reconciliation remains unavailable.
+
 ## September 27 dressed04 visual checkpoint
 
 At clean `ddd93f1a28a1bf60c83fadb08b6c2461e612ad7c`, formatting, three
