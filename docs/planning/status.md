@@ -9,7 +9,7 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
-**Grand V4 — dressed-world integration, 2026-09-27.** `wave/grand-v4`
+**Grand V4 — geography and terrain presentation, 2026-09-29.** `wave/grand-v4`
 preserves the playable `873a2c37` baseline from draft PRs #222/#223 and adds the
 seven-times mainland and independently enlarged Crystal Ascent, five cumulative
 shrines, 127 authored enemies, Shadow-earned teleport, durable resume and shrine
@@ -50,12 +50,29 @@ retain the dominant terrain teeth and reveal a foreground water patch. A measure
 69.10-unit coarse-surface error crosses Crystal's intentional inner wall. A bounded
 canonical-surface repair is being investigated; no terrain flattening is justified.
 NW geometry/representation differences, uniform distant forest and the plain root
-entrance remain explicit limitations. Further builds/captures are held below
-300 MiB free space pending separate cache-cleanup approval.
+entrance remain explicit limitations. Capacity has recovered to about 22 GiB
+free without this continuation executing the pending cache cleanup. Source work
+and validation have resumed.
+
+The September 29 continuation separates actual authored shapes from the distant
+renderer defect. Unequal western buttresses and a broader hollow are prepared in
+one source candidate; its original compact summit is retained around the library
+and Air route. Complete cave cover and all route ribbons pass, with low ridge-side
+connectivity losses explicitly retained as a tradeoff. This still needs immutable
+package publication and actual game/controller review. A source-backed distant
+surface is being developed separately, retaining cliffs, stacked intervals,
+shore contacts and world edits; no geometry remedy is yet integrated.
+
+The app now retains up to one million engine and wall timing samples each and
+reports observed/dropped counts and elapsed coverage. Three focused timing tests
+pass. Missing biome observations interrupt entry dwell, New Run/Continue clear
+notice state, and five focused biome/boat-transform regressions pass. Actual
+package reset assertions and native orientation remain pending.
 
 Full static/temporal acceptance, combined CI, native control feel and measured
-performance remain open. This is **not delivered on `dev`**; the hard stop is 50%
-weekly usage consumed. See the [candidate guide](../development/grand-v4.md) and
+performance remain open. This is **not delivered on `dev`**. The current stop is
+95% weekly usage consumed, leaving 5% available, as interpreted from the latest
+user instruction; the previous 50% stop is superseded. See the [candidate guide](../development/grand-v4.md) and
 [integration record](waves/grand-v4/manifest.md). Linear reconciliation is unverified
 until the connector is reconnected.
 

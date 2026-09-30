@@ -43,6 +43,30 @@ feel/vehicle orientation and full-session 30-minute timing remain separate
 acceptance items; current timing sample caps require correction before such a
 performance claim. Linear reconciliation remains unavailable.
 
+## September 29 focused reliability checkpoint
+
+`b3cd1ef` extends engine/wall timing retention to one million samples each and
+reports coverage/truncation without replacing the existing array prefix. All
+three focused timing tests and formatting pass. The record includes loading,
+menus and pauses, so it does not establish native active-play duration or FPS.
+
+The following app correction resets biome entry dwell when the actual observation
+is unavailable and clears the notice deadline on both successful New Run and
+Continue. Four focused production-observation tests pass. The boat visual uses
+the unchanged hull rotation through one tested helper; its full-heading/sloped-
+normal regression passes. Existing real-package reset phases additionally assert
+notice reset and the production biome/dead-player lookup; those phases require a
+new package run and are not counted as passed by the five focused unit tests.
+
+Source western-buttress study04 retains a coherent compact summit around the
+library/Air spiral and changes the surrounding envelope into unequal shoulders.
+All 69 Grand source tests and scoped schematic Clippy pass, including complete
+natural roof/side cover and every published route ribbon. Earlier studies02/03
+remain rejected for real cave exposure. Whole-ground analysis and all three source
+views are retained for candidate review; no general traversal or final visual
+approval follows from passing source checks. The low western ridge-side losses
+remain explicit, rather than hidden by aggregate connectivity gains.
+
 ## September 27 dressed04 visual checkpoint
 
 At clean `ddd93f1a28a1bf60c83fadb08b6c2461e612ad7c`, formatting, three

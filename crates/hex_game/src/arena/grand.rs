@@ -78,6 +78,39 @@ impl State {
             self.status = "Begin a new expedition? Your current resume will be replaced. Confirm New Run or Cancel.".into();
         }
     }
+
+    fn begin_active_session(&mut self) {
+        self.active = true;
+        self.biome = None;
+        self.biome_candidate = None;
+        self.biome_notice.clear();
+        self.biome_notice_until = 0;
+    }
+
+    fn observe_biome(&mut self, tick: u64, entered: Option<&'static str>) {
+        if tick >= self.biome_notice_until {
+            self.biome_notice.clear();
+        }
+        let Some(entered) = entered else {
+            // Missing observations cannot contribute to a stable entry dwell.
+            self.biome_candidate = None;
+            return;
+        };
+        if self.biome == Some(entered) {
+            self.biome_candidate = None;
+        } else if let Some((candidate, since)) = self.biome_candidate {
+            if candidate != entered {
+                self.biome_candidate = Some((entered, tick));
+            } else if tick.saturating_sub(since) >= 60 {
+                self.biome = Some(entered);
+                self.biome_candidate = None;
+                self.biome_notice = entered.into();
+                self.biome_notice_until = tick.saturating_add(360);
+            }
+        } else {
+            self.biome_candidate = Some((entered, tick));
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -404,27 +437,7 @@ fn update_biome(world: &mut World) {
                 .get_resource::<hex_map::arena::streamed::StreamedArena>()
                 .and_then(|map| map.biome_at(actor.feet))
         });
-    let mut state = world.resource_mut::<State>();
-    if tick >= state.biome_notice_until {
-        state.biome_notice.clear();
-    }
-    let Some(entered) = entered else {
-        return;
-    };
-    if state.biome == Some(entered) {
-        state.biome_candidate = None;
-    } else if let Some((candidate, since)) = state.biome_candidate {
-        if candidate != entered {
-            state.biome_candidate = Some((entered, tick));
-        } else if tick.saturating_sub(since) >= 60 {
-            state.biome = Some(entered);
-            state.biome_candidate = None;
-            state.biome_notice = entered.into();
-            state.biome_notice_until = tick.saturating_add(360);
-        }
-    } else {
-        state.biome_candidate = Some((entered, tick));
-    }
+    world.resource_mut::<State>().observe_biome(tick, entered);
 }
 
 fn update(world: &mut World) {
@@ -733,10 +746,7 @@ fn finish_restore(world: &mut World) {
         view.begin_play();
     }
     let mut state = world.resource_mut::<State>();
-    state.active = true;
-    state.biome = None;
-    state.biome_candidate = None;
-    state.biome_notice.clear();
+    state.begin_active_session();
     state.last_saved_tick = restore.app.tick;
     state.last_reward_key = key;
     state.status = "Expedition resumed".into();
@@ -766,10 +776,7 @@ fn new_run(world: &mut World) -> Result<(), String> {
     state.token = expected;
     state.available = false;
     state.refused = false;
-    state.active = true;
-    state.biome = None;
-    state.biome_candidate = None;
-    state.biome_notice.clear();
+    state.begin_active_session();
     state.force_save = true;
     state.quit_after_save = false;
     state.last_saved_tick = 0;
@@ -782,5 +789,91 @@ fn quit(world: &mut World) {
         recorder.request_quit();
     } else {
         world.write_message(AppExit::Success);
+    }
+}
+
+#[cfg(test)]
+mod biome_tests {
+    use super::*;
+
+    #[test]
+    fn biome_notice_waits_for_stable_entry_then_expires_without_repeating() {
+        let mut state = State::default();
+        for tick in 10..70 {
+            state.observe_biome(tick, Some("Forest"));
+            assert!(state.biome_notice.is_empty());
+        }
+        state.observe_biome(70, Some("Forest"));
+        assert_eq!(state.biome_notice, "Forest");
+        assert_eq!(state.biome, Some("Forest"));
+        state.observe_biome(429, Some("Forest"));
+        assert_eq!(state.biome_notice, "Forest");
+        state.observe_biome(430, Some("Forest"));
+        assert!(state.biome_notice.is_empty());
+        state.observe_biome(900, Some("Forest"));
+        assert!(state.biome_notice.is_empty());
+        assert!(state.biome_candidate.is_none());
+    }
+
+    #[test]
+    fn biome_boundary_oscillation_cannot_accumulate_entry_dwell() {
+        let mut state = State::default();
+        for tick in 0..240 {
+            let label = if (tick / 59) % 2 == 0 {
+                "Forest"
+            } else {
+                "River Valley"
+            };
+            state.observe_biome(tick, Some(label));
+            assert!(state.biome.is_none());
+            assert!(state.biome_notice.is_empty());
+        }
+        for tick in 240..300 {
+            state.observe_biome(tick, Some("River Valley"));
+            assert!(state.biome_notice.is_empty());
+        }
+        state.observe_biome(300, Some("River Valley"));
+        assert_eq!(state.biome_notice, "River Valley");
+    }
+
+    #[test]
+    fn biome_observation_interruption_requires_a_new_stable_dwell() {
+        let mut state = State::default();
+        state.observe_biome(0, Some("Forest"));
+        state.observe_biome(59, Some("Forest"));
+        state.observe_biome(60, None);
+        state.observe_biome(1_000, Some("Forest"));
+        assert!(state.biome_notice.is_empty());
+        state.observe_biome(1_059, Some("Forest"));
+        assert!(state.biome_notice.is_empty());
+        state.observe_biome(1_060, Some("Forest"));
+        assert_eq!(state.biome_notice, "Forest");
+        state.observe_biome(1_420, None);
+        assert!(state.biome_notice.is_empty());
+        assert_eq!(state.biome, Some("Forest"));
+    }
+
+    #[test]
+    fn biome_world_update_respects_activation_and_missing_observations() {
+        let mut world = World::new();
+        world.insert_resource(State {
+            biome_candidate: Some(("Forest", 0)),
+            biome_notice: "Old notice".into(),
+            biome_notice_until: 30,
+            ..default()
+        });
+        // Inactive sessions must not even need gameplay or map resources.
+        update_biome(&mut world);
+        assert_eq!(
+            world.resource::<State>().biome_candidate,
+            Some(("Forest", 0))
+        );
+        assert_eq!(world.resource::<State>().biome_notice, "Old notice");
+        world.insert_resource(ArenaSession::default());
+        world.resource_mut::<ArenaSession>().tick = 100;
+        world.resource_mut::<State>().active = true;
+        update_biome(&mut world);
+        assert!(world.resource::<State>().biome_candidate.is_none());
+        assert!(world.resource::<State>().biome_notice.is_empty());
     }
 }

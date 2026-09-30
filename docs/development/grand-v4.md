@@ -161,6 +161,13 @@ waterfall/library branches → Shadow → Crystal/summit → glider descent. Exe
 shrines, valid/refused teleport, death, and process restart on land/boat/air. Run
 repeated circuits and a 30-minute session, report frame-time percentiles and loading,
 and inspect vehicle orientation, colored strips and ocean seams in both directions.
+Capture timing records retain up to one million engine and wall samples each,
+with separately bounded simulation-dt context. `frame_timing_coverage` records
+observed, retained and dropped counts plus first-to-last elapsed wall time.
+Compute full-session frame percentiles only when its
+`full_session_frame_percentiles_allowed` is true. This app-lifetime record includes
+loading, menus and pauses; establishing thirty minutes of active native play
+requires the named play route as well as complete timing coverage.
 Continuous windowless sequences can review temporal presentation. The named native
 route still needs an explicitly approved live or user playtest for control feel and
 taste; stills and headless timing do not establish those qualities or 60 FPS.

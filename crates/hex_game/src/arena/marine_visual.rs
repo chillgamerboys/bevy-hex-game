@@ -128,12 +128,56 @@ fn present(
         *visibility = Visibility::Inherited;
         // The deck offset is physical; no independent sine or camera bob exists.
         transform.translation = actor.feet - Vec3::Y * 0.35;
-        let up = boat.surface_normal.normalize_or(Vec3::Y);
-        let forward = (boat.heading - up * boat.heading.dot(up)).normalize_or(Vec3::NEG_Z);
-        transform.rotation = Transform::IDENTITY.looking_to(forward, up).rotation;
+        transform.rotation = hull_rotation(boat.heading, boat.surface_normal);
         let across = boat.wind.dot(boat.heading.cross(Vec3::Y));
         for mut sail in &mut sails {
             sail.rotation = Quat::from_rotation_y((across / 10.0).clamp(-0.8, 0.8));
+        }
+    }
+}
+
+fn hull_rotation(heading: Vec3, surface_normal: Vec3) -> Quat {
+    let up = surface_normal.normalize_or(Vec3::Y);
+    let forward = (heading - up * heading.dot(up)).normalize_or(Vec3::NEG_Z);
+    Transform::IDENTITY.looking_to(forward, up).rotation
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boat_bow_and_hull_stay_oriented_through_full_turns_on_sloped_water() {
+        for normal in [
+            Vec3::Y,
+            Vec3::new(0.25, 1.0, 0.0),
+            Vec3::new(-0.55, 1.0, 0.35),
+            Vec3::new(0.65, 1.0, -0.50),
+        ] {
+            let up = normal.normalize();
+            let mut previous = None;
+            for degrees in 0_u16..=720 {
+                let heading = Quat::from_rotation_y(f32::from(degrees).to_radians()) * Vec3::NEG_Z;
+                let rotation = hull_rotation(heading, normal);
+                let bow = rotation * Vec3::NEG_Z;
+                let hull_up = rotation * Vec3::Y;
+                assert!(rotation.is_finite());
+                assert!(hull_up.y > 0.70, "hull inverted at {degrees} degrees");
+                assert!(hull_up.dot(up) > 0.9999);
+                assert!(bow.dot(heading) > 0.70, "bow reversed at {degrees} degrees");
+                assert!(
+                    bow.dot(up).abs() < 0.0001,
+                    "bow must lie on the water plane"
+                );
+                assert!(
+                    bow.cross(heading).dot(up).abs() < 0.0001,
+                    "bow must follow the heading projected onto that plane"
+                );
+                if let Some(previous) = previous {
+                    assert!(rotation.angle_between(previous) < 0.03);
+                }
+                previous = Some(rotation);
+            }
         }
     }
 }

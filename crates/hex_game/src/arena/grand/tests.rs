@@ -460,6 +460,65 @@ fn world_records(world: &World) -> BTreeMap<String, u64> {
         .collect()
 }
 
+fn seed_previous_biome_notice(app: &mut App) {
+    let mut state = app.world_mut().resource_mut::<State>();
+    state.biome = Some("Previous expedition");
+    state.biome_candidate = Some(("Previous boundary", 1));
+    state.biome_notice = "Previous expedition".into();
+    state.biome_notice_until = u64::MAX;
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "The real-package reset check requires an admitted living player and its authored biome."
+)]
+fn assert_reset_biome_and_production_lookup(app: &mut App) {
+    let state = app.world().resource::<State>();
+    assert!(state.biome.is_none());
+    assert!(state.biome_candidate.is_none());
+    assert!(state.biome_notice.is_empty());
+    assert_eq!(state.biome_notice_until, 0);
+    let session = app.world().resource::<ArenaSession>();
+    let actor = session
+        .actors
+        .iter()
+        .find(|actor| actor.id == 0)
+        .expect("player");
+    assert!(actor.hp > 0.0);
+    let hp = actor.hp;
+    let tick = session.tick;
+    let label = app
+        .world()
+        .resource::<StreamedArena>()
+        .biome_at(actor.feet)
+        .expect("authored biome");
+    update_biome(app.world_mut());
+    assert_eq!(
+        app.world().resource::<State>().biome_candidate,
+        Some((label, tick))
+    );
+    assert!(app.world().resource::<State>().biome_notice.is_empty());
+
+    // The actual actor lookup must interrupt dwell while the player is dead.
+    // This is presentation-only fixture setup: no simulation or clock advances.
+    app.world_mut()
+        .resource_mut::<ArenaSession>()
+        .actors
+        .iter_mut()
+        .find(|actor| actor.id == 0)
+        .expect("player")
+        .hp = 0.0;
+    update_biome(app.world_mut());
+    assert!(app.world().resource::<State>().biome_candidate.is_none());
+    app.world_mut()
+        .resource_mut::<ArenaSession>()
+        .actors
+        .iter_mut()
+        .find(|actor| actor.id == 0)
+        .expect("player")
+        .hp = hp;
+}
+
 #[expect(
     clippy::expect_used,
     reason = "This acceptance phase must produce and reopen a complete real application save or fail with the precise missing boundary."
@@ -470,6 +529,7 @@ fn write_phase(app: &mut App, mode: &str, root: &std::path::Path) {
         "writer fixture must start in isolated empty storage"
     );
     let initial_generation = app.world().resource::<ArenaReset>().generation;
+    seed_previous_biome_notice(app);
     press_menu_action(app, hud::Action::NewRun);
     update(app.world_mut());
     assert!(app.world().resource::<State>().confirmation);
@@ -496,6 +556,10 @@ fn write_phase(app: &mut App, mode: &str, root: &std::path::Path) {
         "cancelled or unsolicited confirmation cannot reset storage"
     );
     assert!(!app.world().resource::<State>().active);
+    assert_eq!(
+        app.world().resource::<State>().biome_notice,
+        "Previous expedition"
+    );
 
     press_menu_action(app, hud::Action::NewRun);
     update(app.world_mut());
@@ -504,6 +568,7 @@ fn write_phase(app: &mut App, mode: &str, root: &std::path::Path) {
     assert!(!app.world().resource::<State>().confirmation);
     assert!(app.world().resource::<State>().active);
     assert!(app.world().resource::<ViewState>().started);
+    assert_reset_biome_and_production_lookup(app);
     assert_eq!(
         app.world().resource::<ArenaReset>().generation,
         initial_generation + 1
@@ -754,6 +819,7 @@ fn read_phase(app: &mut App, mode: &str, root: &std::path::Path) {
         before_token,
         "Cancel must retain the exact durable resume slot"
     );
+    seed_previous_biome_notice(app);
     press_menu_action(app, hud::Action::Start);
     assert!(matches!(
         app.world().resource::<State>().request,
@@ -766,6 +832,7 @@ fn read_phase(app: &mut App, mode: &str, root: &std::path::Path) {
         |world| world.resource::<State>().restoring.is_none(),
     );
     assert_eq!(app.world().resource::<State>().status, "Expedition resumed");
+    assert_reset_biome_and_production_lookup(app);
     assert_mode(app.world(), mode);
     let expected = ArenaSession::decode_grand_checkpoint(
         &bytes,
