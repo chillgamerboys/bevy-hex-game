@@ -1,5 +1,52 @@
 # Grand V4 integration wave
 
+## September 30 measured continuation
+
+Clean source `3eefdfa53ac01c9210fc58b09ee6570e464d11b9` publishes immutable
+`compiled-r02-surface-sample-01`: package `8875525449639290247`, source
+`6841882335923203085`. This is a four-chunk Crystal diagnostic on the banked
+western geography, not the isolated coast or volcano candidates. It has 3,323,269
+columns and 13,134 chunks; mainland/Crystal remain 6.999775×/7.005680×.
+After validating root identity fields, 13,133 chunk payloads match dressed05;
+only fountain chunk `46_-18` changes. Raw files differ because source bindings
+change, and no raw-byte identity is claimed.
+
+All six original south/east/summit baseline/candidate frames were inspected.
+The same immutable package and matching cameras produce a useful localized
+Crystal rim correction in the summit pair. The selected chunks are ordinary
+baseline proxies, not existing inland replacements. Actual candidate assets
+report four converted/published/view-visible chunks, 14 source/halo chunks,
+14,668 vertices, 8,170 triangles and 684,760 packed bytes. This is neither
+unoccluded pixel ownership nor total memory or frame-rate evidence. Large legacy
+outer interfaces remain. Global activation is withheld pending closed indexed
+interfaces, fresh whole-world cost and edit/publication checks.
+
+Fresh separate-process land, boat and airborne restart cases pass on this exact
+package, retaining full owner state, active attacks, partial voxel damage and
+revisited destruction. The actual fountain phase fails on the courtyard-to-
+southern-landing leg: unsupported descent 0.376129 exceeds the unchanged
+0.3509-unit limit. Garden ascent passes; healing and duplicate-use assertions
+are not reached. Its full receipt remains FAIL, independently of the restart
+successes.
+
+The common coast source04 passes 72 source tests but is withheld after independent
+review finds the old Air stair endpoint 18.9 units below its revised summit.
+Source05 reaches the summit with valid emitted stairs and body space, but fails
+249 natural-cover columns. Preserve the failed candidate. A covered continuation
+of the inner stair and complete court/landing geography are the next source
+corrections, without relaxing movement or cave-cover limits.
+
+The broad-flank volcano trial is also rejected: 68 source tests pass and four
+fail. Landing-connected ground improves 66,243→81,652, but eight oversized
+ascent edges remain and crater relief collapses from 161 to 38 levels, below
+the retained 80-level minimum. Source views confirm the basin is filled; no
+package or integration commit is authorized by these results.
+
+Weekly stop remains 95% consumed, leaving 5% available; latest checked usage is
+85%. Full static/temporal review, general traversal, combined selector CI and
+authorized native play/performance acceptance remain open. No completion or
+60 FPS claim follows from these bounded checkpoints.
+
 ## September 29 continuation
 
 The user resumed development with the instruction to finish the task or stop at

@@ -1,5 +1,13 @@
 # Grand V4 candidate
 
+The September 30 integration is still a draft. The current immutable Crystal
+diagnostic corrects four ordinary distant-proxy chunks; it does not switch the
+whole world or accept the redesigned coast/volcano. Fresh land/boat/air
+process-restart checks pass, while actual fountain access still fails before the
+southern landing. See the latest checkpoint in the
+[wave manifest](../planning/waves/grand-v4/manifest.md) for exact source/package
+identities, failed geometry studies and remaining acceptance.
+
 Grand V4 is a selectable streamed expedition built on `feat/water-lab` at
 `873a2c37eeb8eda23c11d398ce7d68d7965a64db`. The integration branch preserves the
 Forest, Northern Archipelago and Water Lab work in draft PRs #222 and #223 and
