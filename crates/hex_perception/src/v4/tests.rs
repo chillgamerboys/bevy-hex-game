@@ -71,6 +71,7 @@ fn world(regions: &[(WorldHex, u32)], level: i32) -> WorldPackage {
         .collect();
     let mut package = WorldPackage {
         manifest: WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: "perception-world".into(),
             compiler_version: "perception-fixture".into(),

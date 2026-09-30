@@ -66,6 +66,7 @@ fn source() -> InlandWaterOverview {
 }
 fn overview(source: InlandWaterOverview) -> NorthernOverview {
     NorthernOverview {
+        terrain_surface: None,
         version: 1,
         source_fingerprint: 1,
         package_fingerprint: 2,
@@ -104,6 +105,7 @@ fn fixture() -> Result<(WorldRuntime, FiniteWorldSession), Box<dyn std::error::E
     let chunk = p.chunk();
     let mut package = WorldPackage {
         manifest: WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: "grand-v4".into(),
             compiler_version: "water-test".into(),

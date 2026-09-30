@@ -1501,6 +1501,7 @@ mod tests {
 
     pub(super) fn planar_overview() -> NorthernOverview {
         NorthernOverview {
+            terrain_surface: None,
             version: 1,
             source_fingerprint: 0,
             package_fingerprint: 0,

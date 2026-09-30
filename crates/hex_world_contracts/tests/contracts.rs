@@ -77,6 +77,7 @@ fn world(origin: WorldHex, radius: u32) -> WorldPackage {
         .collect();
     let mut package = WorldPackage {
         manifest: WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: "world".into(),
             compiler_version: "fixture-v1".into(),
@@ -1483,4 +1484,93 @@ fn grounding_admission_rejects_missing_forged_and_unsupported_contacts() {
         forged.seal().is_err(),
         "contact must touch occupied geometry"
     );
+}
+
+#[test]
+fn optional_presentation_binding_preserves_old_manifest_wire_and_fingerprint() {
+    // This is the pre-extension wire layout, deliberately without the new field.
+    #[derive(serde::Serialize)]
+    struct LegacyManifest<'a> {
+        schema_version: u32,
+        world_id: &'a str,
+        compiler_version: &'a str,
+        source_fingerprint: u64,
+        materials: &'a [MaterialSpec],
+        regions: &'a [RegionDescriptor],
+        chunks: &'a [ChunkDescriptor],
+        boundaries: &'a [BoundaryContract],
+        summary: &'a [MapSummaryCell],
+        features: &'a [FeatureSummary],
+        fingerprint: u64,
+    }
+    let manifest = world(WorldHex::new(0, 0), 1).manifest;
+    let legacy = LegacyManifest {
+        schema_version: manifest.schema_version,
+        world_id: &manifest.world_id,
+        compiler_version: &manifest.compiler_version,
+        source_fingerprint: manifest.source_fingerprint,
+        materials: &manifest.materials,
+        regions: &manifest.regions,
+        chunks: &manifest.chunks,
+        boundaries: &manifest.boundaries,
+        summary: &manifest.summary,
+        features: &manifest.features,
+        fingerprint: 0,
+    };
+    let original_fingerprint = hash_serializable(&legacy).expect("old layout hash");
+    assert_eq!(manifest.fingerprint, original_fingerprint);
+    let old_wire = ron::to_string(&LegacyManifest {
+        fingerprint: original_fingerprint,
+        ..legacy
+    })
+    .expect("old manifest wire");
+    assert!(!old_wire.contains("presentation_fingerprints"));
+    let admitted: WorldManifest = parse_ron(&old_wire).expect("old manifest remains valid");
+    assert!(admitted.presentation_fingerprints.is_empty());
+    assert_eq!(admitted.fingerprint, original_fingerprint);
+    assert_eq!(ron::to_string(&admitted).expect("new serializer"), old_wire);
+
+    let mut bound = admitted;
+    bound
+        .presentation_fingerprints
+        .insert("grand-terrain-surface-v1".into(), 17);
+    bound.seal().expect("bounded presentation binding");
+    assert_ne!(bound.fingerprint, original_fingerprint);
+    bound
+        .presentation_fingerprints
+        .insert("grand-terrain-surface-v1".into(), 18);
+    assert!(
+        bound.validate().is_err(),
+        "modified binding invalidates manifest checksum"
+    );
+}
+
+#[test]
+fn presentation_bindings_reject_noncanonical_duplicate_and_excess_keys() {
+    let original = world(WorldHex::new(0, 0), 1).manifest;
+    for key in [
+        "",
+        "Upper",
+        "-leading",
+        "trailing-",
+        "with/slash",
+        "has space",
+    ] {
+        let mut invalid = original.clone();
+        invalid.presentation_fingerprints.insert(key.into(), 1);
+        assert!(invalid.seal().is_err(), "accepted invalid key {key:?}");
+    }
+    let mut excessive = original.clone();
+    excessive.presentation_fingerprints = (0..17)
+        .map(|index| (format!("capability-{index}"), index))
+        .collect();
+    assert!(excessive.seal().is_err());
+    let old_wire = ron::to_string(&original).expect("manifest wire");
+    let suffix = format!(",fingerprint:{})", original.fingerprint);
+    let prefix = old_wire
+        .strip_suffix(&suffix)
+        .expect("final manifest checksum");
+    let duplicate =
+        format!("{prefix},presentation_fingerprints:{{\"surface-v1\":1,\"surface-v1\":2}}{suffix}");
+    assert!(ron::from_str::<WorldManifest>(&duplicate).is_err());
 }

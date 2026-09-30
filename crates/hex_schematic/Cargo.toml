@@ -12,6 +12,7 @@ ron = { workspace = true }
 rustix = { workspace = true }
 serde = { workspace = true }
 xxhash-rust = { workspace = true, features = ["xxh3"] }
+spade = "=2.15.1"
 
 [dev-dependencies]
 serde_json = "1"

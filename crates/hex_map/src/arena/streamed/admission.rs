@@ -86,6 +86,22 @@ pub(super) fn validate_overview(
         return Err("Streamed ocean lies outside the finite height bounds".into());
     }
     validate_cameras(overview, &bounds)?;
+    use hex_schematic::v4::northern::terrain_surface::TERRAIN_SURFACE_KEY;
+    match (
+        &overview.terrain_surface,
+        manifest.presentation_fingerprints.get(TERRAIN_SURFACE_KEY),
+    ) {
+        (None, None) => {}
+        (Some(surface), Some(expected)) if manifest.world_id == "grand-v4" => {
+            surface
+                .validate_profiles(overview.radius, overview.level_bounds, &overview.materials)
+                .map_err(|error| error.to_string())?;
+            if surface.fingerprint().map_err(|error| error.to_string())? != *expected {
+                return Err("Grand terrain surface differs from its sealed package".into());
+            }
+        }
+        _ => return Err("Grand terrain surface is missing or has no package binding".into()),
+    }
     super::grand_water::validate(overview)?;
     if let Some(forest) = &overview.forest {
         if manifest.world_id != "grand-v4" {
@@ -220,6 +236,7 @@ mod tests {
         }];
         let samples = usize::try_from(width * height).unwrap();
         let overview = NorthernOverview {
+            terrain_surface: None,
             version: 1,
             source_fingerprint: 11,
             package_fingerprint: 22,
@@ -250,6 +267,7 @@ mod tests {
         // This seam receives an already-admitted manifest. Chunk completeness
         // and payload hashes belong to FileChunkSource, not overview validation.
         let manifest = WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: hex_world_contracts::SCHEMA_VERSION,
             world_id: id.into(),
             compiler_version: "admission-fixture".into(),
@@ -268,6 +286,45 @@ mod tests {
             fingerprint: 22,
         };
         (overview, manifest)
+    }
+
+    #[test]
+    fn terrain_surface_requires_the_exact_manifest_content_binding() {
+        use hex_schematic::v4::northern::terrain_surface::{
+            TerrainSurfaceOverview, TERRAIN_SURFACE_KEY,
+        };
+        let (mut overview, mut manifest) = fixture(true);
+        let surface = TerrainSurfaceOverview {
+            version: 1,
+            tolerance: 2.0,
+            profiles: Vec::new(),
+            chunks: Vec::new(),
+        };
+        overview.terrain_surface = Some(surface.clone());
+        assert!(
+            validate_overview(&overview, &manifest).is_err(),
+            "unbound payload"
+        );
+        manifest
+            .presentation_fingerprints
+            .insert(TERRAIN_SURFACE_KEY.into(), surface.fingerprint().unwrap());
+        validate_overview(&overview, &manifest).unwrap();
+        overview.terrain_surface.as_mut().unwrap().tolerance = 1.0;
+        assert!(
+            validate_overview(&overview, &manifest).is_err(),
+            "modified content"
+        );
+        overview.terrain_surface = None;
+        assert!(
+            validate_overview(&overview, &manifest).is_err(),
+            "missing payload"
+        );
+        overview.terrain_surface = Some(surface);
+        overview.terrain_surface.as_mut().unwrap().version = 2;
+        assert!(
+            validate_overview(&overview, &manifest).is_err(),
+            "unsupported content"
+        );
     }
 
     #[test]

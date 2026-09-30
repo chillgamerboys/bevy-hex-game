@@ -1475,6 +1475,7 @@ fn assemble(
         .collect();
     let mut package = WorldPackage {
         manifest: WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: source.id.clone(),
             compiler_version: COMPILER_VERSION.into(),

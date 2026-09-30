@@ -121,6 +121,7 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         .collect();
     let mut package = WorldPackage {
         manifest: WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: "grand-v4".into(),
             compiler_version: "test-1".into(),

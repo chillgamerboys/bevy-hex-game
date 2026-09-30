@@ -849,6 +849,7 @@ pub(in crate::v4) mod tests {
         }
         let mut package = WorldPackage {
             manifest: WorldManifest {
+                presentation_fingerprints: Default::default(),
                 schema_version: SCHEMA_VERSION,
                 world_id: "walk-test".into(),
                 compiler_version: "walk-test".into(),

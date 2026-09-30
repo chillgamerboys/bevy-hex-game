@@ -171,6 +171,14 @@ pub struct WorldManifest {
     pub summary: Vec<MapSummaryCell>,
     /// World feature registry sorted by ID.
     pub features: Vec<FeatureSummary>,
+    /// Bounded presentation capability keys and canonical companion fingerprints.
+    /// Empty old manifests serialize exactly as before this optional extension.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::validation::deserialize_unique_map"
+    )]
+    pub presentation_fingerprints: BTreeMap<String, u64>,
     /// Hash of this canonical manifest with this field zeroed.
     pub fingerprint: u64,
 }

@@ -107,6 +107,7 @@ fn world(regions: &[(WorldHex, u32)]) -> WorldPackage {
         .collect();
     let mut package = WorldPackage {
         manifest: WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: "test-world".into(),
             compiler_version: "test-1".into(),

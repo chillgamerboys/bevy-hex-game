@@ -561,6 +561,7 @@ mod tests {
             .collect();
         let mut package = WorldPackage {
             manifest: WorldManifest {
+                presentation_fingerprints: Default::default(),
                 schema_version: SCHEMA_VERSION,
                 world_id: "planner-world".into(),
                 compiler_version: "planner-fixture".into(),

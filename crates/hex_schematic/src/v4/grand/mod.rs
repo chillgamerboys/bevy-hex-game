@@ -618,6 +618,7 @@ impl GrandCompiler {
     /// Create the manifest; the writer adds descriptors and seals it.
     pub fn manifest(&self) -> WorldManifest {
         WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: self.source.id.clone(),
             compiler_version: "hex-grand/r02-1".into(),
@@ -692,6 +693,7 @@ impl GrandCompiler {
             })
             .collect();
         NorthernOverview {
+            terrain_surface: None,
             version: 1,
             source_fingerprint: self.source_fingerprint,
             package_fingerprint: 0,

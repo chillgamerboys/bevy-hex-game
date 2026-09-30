@@ -63,6 +63,7 @@ fn fixture() -> Fixture {
     }
     let mut package = WorldPackage {
         manifest: WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: "queue-water".into(),
             compiler_version: "queue-lifecycle-test".into(),

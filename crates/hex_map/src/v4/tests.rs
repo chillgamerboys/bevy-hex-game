@@ -49,6 +49,7 @@ pub(super) fn fixture(origin: WorldHex) -> WorldPackage {
     }
     let mut world = WorldPackage {
         manifest: WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: "fixture".into(),
             compiler_version: "tests-v1".into(),

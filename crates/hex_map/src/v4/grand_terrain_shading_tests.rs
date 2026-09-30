@@ -29,6 +29,7 @@ fn fixture() -> WorldPackage {
 }
 fn overview(p: &WorldPackage) -> NorthernOverview {
     NorthernOverview {
+        terrain_surface: None,
         version: 1,
         source_fingerprint: 12,
         package_fingerprint: p.manifest.fingerprint,

@@ -23,6 +23,7 @@ fn fixture(
     let chunk = p.chunk();
     let mut package = WorldPackage {
         manifest: WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: "grand-v4".into(),
             compiler_version: "ground-test".into(),

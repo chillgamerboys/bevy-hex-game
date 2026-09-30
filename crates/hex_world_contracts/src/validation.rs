@@ -525,6 +525,23 @@ impl Validate for WorldManifest {
         schema(self.schema_version)?;
         name(&self.world_id, "world_id")?;
         name(&self.compiler_version, "compiler_version")?;
+        if self.presentation_fingerprints.len() > 16
+            || self.presentation_fingerprints.keys().any(|key| {
+                key.is_empty()
+                    || key.len() > 64
+                    || !key.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+                    || !key.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
+                    || key.bytes().any(|byte| {
+                        !byte.is_ascii_lowercase() && !byte.is_ascii_digit() && byte != b'-'
+                    })
+            })
+        {
+            return Err(reject(
+                "presentation_fingerprints",
+                "expected at most 16 canonical lowercase capability keys, each 1..64 bytes",
+            ));
+        }
+
         ordered(self.materials.iter().map(|entry| &entry.id), "materials")?;
         for material in &self.materials {
             material_name(&material.id)?;

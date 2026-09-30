@@ -53,6 +53,7 @@ fn fixture() -> StreamedArena {
         .collect();
     let mut package = WorldPackage {
         manifest: WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: "liquid-fixture".into(),
             compiler_version: "tests-v1".into(),

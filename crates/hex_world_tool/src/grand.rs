@@ -102,6 +102,13 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
             path,
         });
     }
+    let mut overview = compiler.overview();
+    if let Some(surface) = &overview.terrain_surface {
+        manifest.presentation_fingerprints.insert(
+            hex_schematic::v4::northern::terrain_surface::TERRAIN_SURFACE_KEY.into(),
+            surface.fingerprint()?,
+        );
+    }
     manifest.seal()?;
     fs::write(stage.join("manifest.ron"), ron::to_string(&manifest)?)?;
     // Admission validates membership, materials and chunk hash through production IO.
@@ -111,7 +118,6 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
             .load_chunk(descriptor.coordinate)
             .map_err(|error| format!("Grand chunk {:?}: {error}", descriptor.coordinate))?;
     }
-    let mut overview = compiler.overview();
     overview.package_fingerprint = manifest.fingerprint;
     fs::write(stage.join("grand-overview.ron"), ron::to_string(&overview)?)?;
     let sites = compiler.sites(manifest.fingerprint)?;

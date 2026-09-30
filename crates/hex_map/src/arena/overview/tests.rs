@@ -335,6 +335,7 @@ fn v4_overview_preserves_package_colors_after_collision_material_aliasing() {
         .collect();
     let mut package = WorldPackage {
         manifest: WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: "overview-palette".into(),
             compiler_version: "test".into(),

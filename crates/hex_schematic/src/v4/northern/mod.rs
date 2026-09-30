@@ -8,6 +8,7 @@ pub mod forest;
 pub mod ground_cover;
 mod objects;
 mod presentation;
+pub mod terrain_surface;
 pub use presentation::{
     InlandWaterChunk, InlandWaterColumn, InlandWaterOverview, NorthernReviewCamera,
     MAX_INLAND_TERRAIN_COLUMNS, MAX_INLAND_TERRAIN_RUNS, MAX_INLAND_WATER_COLUMNS,
@@ -219,6 +220,9 @@ pub struct NorthernOverview {
     /// Optional exact inland water geometry, independent of the seabed height grid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inland_water: Option<InlandWaterOverview>,
+    /// Optional certified solid terrain surface, bound by the sealed manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terrain_surface: Option<terrain_surface::TerrainSurfaceOverview>,
     /// Authored review cameras in final runtime coordinates; old sources have none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub review_cameras: BTreeMap<String, NorthernReviewCamera>,
@@ -580,6 +584,7 @@ impl NorthernCompiler {
     /// Unsealed independent manifest; the writer fills chunk descriptors then seals it.
     pub fn manifest(&self) -> WorldManifest {
         WorldManifest {
+            presentation_fingerprints: Default::default(),
             schema_version: SCHEMA_VERSION,
             world_id: self.source.id.clone(),
             compiler_version: "hex-northern/2".into(),
@@ -638,6 +643,7 @@ impl NorthernCompiler {
             })
             .collect();
         NorthernOverview {
+            terrain_surface: None,
             version: 1,
             source_fingerprint: self.source_fingerprint,
             package_fingerprint: 0,
