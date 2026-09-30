@@ -1,16 +1,22 @@
 # Grand V4 candidate
 
-The September 30 integration remains a draft. The latest ordinary package,
-`compiled-r02-dressed-06-common-coast` at clean `a64f506`, derives coastline and
-physical ground from the same landform field. Mainland/Crystal measure
-7.048014×/7.005680×. The Air stair reaches its revised shrine, and garden
-approach now passes the actual controller. Fresh restart, sailing, encounter
-admission and bounded residency checks pass. Ordinary walking passes 19 of 20
-routes: a western foothill transition still blocks. Fountain discovery also
-fails because the observer can select the visible outlet rill while the basin
-is occluded. These failures remain explicit. The world-owned basin-target fix
-is integrated in source with 37 focused tests and scoped Clippy passing; its
-fresh-package actual-controller verification remains pending.
+The September 30 integration remains a draft. The latest verified ordinary
+package is `compiled-r02-dressed-07-fountain-basin` at clean `7e3d50a`, with
+package identity `18041799259933078165` and source `3780620259287788177`.
+The unchanged actual fountain test now passes: the hidden basin remains
+undiscovered, visibility reveals it, contact heals 50→90 once, and reinjury plus
+90 simulation ticks does not grant a duplicate heal. Land, boat and airborne
+separate-process resumes pass on this exact package.
+
+Its common-coast geometry measures mainland/Crystal 7.048014×/7.005680×.
+The preceding D06 package passes 19 of 20 ordinary walking routes; its western
+foothill uphill failure remains preserved. The integrated lower-buttress trial
+changes only three geography values. Exact source export lowers 6,648 tops,
+retains water/coastline, and grows the bounded body component by 522 gains with
+213 local losses. Full Grand tests and scoped Clippy pass in the isolated source;
+its combined fresh-package actual walk and visual review remain pending.
+The Air review target is lowered to frame the shrine from its corrected summit
+camera. This is a camera change, not proof of readability.
 
 All seven new native originals were independently inspected. The low coast is
 legible; upper triangular/banded surfaces and repeated forest silhouettes remain,

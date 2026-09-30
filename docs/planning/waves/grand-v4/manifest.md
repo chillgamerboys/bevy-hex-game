@@ -1,12 +1,40 @@
 # Grand V4 integration wave
 
+## September 30 fountain acceptance and lower foothill trial
+
+Clean `7e3d50a35fd54f6f4deffe936963d815e104c330` publishes ordinary immutable
+`compiled-r02-dressed-07-fountain-basin`: package `18041799259933078165`, source
+`3780620259287788177`. Strict publication/readback, 74 Grand tests, 13 surface
+tests and scoped Clippy pass. The actual fountain controller and separate land,
+boat and airborne restart cases all pass on this package. The fountain stays
+undiscovered while its basin is hidden, reveals at the basin when visible,
+heals 50→90 once, and does not heal again after reinjury and 90 simulation ticks.
+The earlier D06 fountain failure is retained below rather than rewritten.
+
+The subsequent western-foot trial integrates only lower slope power 1.7→2.4
+and two lower crests 78→63 / 128→113. All coordinates, widths, upper peaks,
+water and sites remain fixed. Exact whole-body export covers 44,254 columns:
+6,648 final tops lower, none rise; all remain dry and mainland/coast identity
+is unchanged. The largest bounded component grows 20,392→20,701, with 522 gains
+and 213 losses, all below 70 physical units. Net growth does not erase those
+losses. Source studies from south/east/northwest retain the summit and connected
+Crystal/Frozen/lake silhouette; the upper face remains steep. Full unchanged
+Grand source tests and scoped Clippy pass. The failed approach now has exact
+support levels 502→503→504→505, but the unchanged actual ordinary controller is
+still required. This is not broad traversal or user visual acceptance.
+
+The Air camera keeps its corrected high-layer hint and lowers its look target
+to frame the shrine. A combined strict P08 package and actual walk/camera review
+are the next gates. The old volcano and ordinary legacy overview remain active;
+the isolated volcano and global closed-surface producer are not integrated.
+
 ## September 30 common-coast package and actual review
 
 Clean `a64f506ab82283b00a67c016618295be7b6bec3d` publishes ordinary immutable
 `compiled-r02-dressed-06-common-coast`: package `6744055940943002088`, source
 `10344533912446709053`. Strict publication/readback passes. The source gate passes
-74 Grand tests and 13 surface tests plus scoped Clippy; eight ignored integration
-tests are separate. This package has 3,323,269 columns, 13,134 chunks and 843
+74 Grand tests and 13 surface tests plus scoped Clippy; nine explicit source/study
+selectors remain ignored. This package has 3,323,269 columns, 13,134 chunks and 843
 objects. Mainland is 657,763 columns versus original 93,326: 7.048014×, within
 the fixed-before-measurement 2% tolerance. Crystal independently measures
 22,201/3,169 = 7.005680×.
@@ -62,7 +90,7 @@ straight-chord ascent still has 306 excessive steps, so this is not integrated
 or traversally accepted. Rejected earlier studies and the next contour-waypoint
 survey are preserved.
 
-Weekly stop remains 95% consumed, leaving 5%. Latest observed usage is 91%.
+Weekly stop remains 95% consumed, leaving 5%. Latest observed usage is 93%.
 General foothill traversal, visual approval, final volcano/ascent, fountain
 acquisition, global joins, full static/temporal matrix, combined selector CI and
 an authorized 30-minute native play/performance session remain open.
