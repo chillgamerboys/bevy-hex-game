@@ -198,6 +198,14 @@ impl PlayerKnowledge {
 }
 
 impl ArenaSession {
+    /// Read the same solid sight cache used by player discovery, without changing knowledge.
+    /// Only explicit acceptance builds expose this diagnostic; callers must prove residency.
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub fn observation_sight_clear(&self, origin: Vec3, target: Vec3) -> bool {
+        self.collision.sight_clear(origin, target)
+    }
+
     /// Admit camera observations at most ten times per second; inactive samples
     /// clear transient feedback/dwell but preserve discovered facts across death/pause.
     pub fn observe_player(
