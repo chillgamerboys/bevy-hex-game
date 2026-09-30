@@ -35,6 +35,7 @@ mod grand_inland_terrain;
 mod grand_landmarks;
 mod grand_water;
 mod render;
+pub use render::{surface_sample_snapshot, GrandSurfaceSampleSnapshot};
 #[cfg(test)]
 mod tests;
 

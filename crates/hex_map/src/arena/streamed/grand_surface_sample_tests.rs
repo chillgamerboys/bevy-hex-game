@@ -403,3 +403,134 @@ fn sample_native_cliff_void_and_materials_survive_without_mutating_detail_or_pic
         0
     );
 }
+
+#[test]
+fn snapshot_reports_retained_products_and_edit_fallback_then_disappears_on_clear() {
+    let mut world = World::new();
+    assert!(surface_sample_snapshot(&world).is_none());
+    let (map, runtime, edits) = fixture();
+    let products = meshes(&map, &edits).unwrap();
+    let expected_vertices: usize = products.values().map(Mesh::count_vertices).sum();
+    let expected_indices: usize = products
+        .values()
+        .map(|mesh| mesh.indices().unwrap().len())
+        .sum();
+    let sample = State {
+        selected: products.keys().copied().collect(),
+        revisions: revisions(map.terrain_surface.as_ref().unwrap(), &edits),
+        exact_edited_fallback: false,
+    };
+    let presenter = TerrainPresenter::new(
+        runtime.manifest(),
+        RenderOrigin::default(),
+        map.level_height,
+    )
+    .unwrap();
+    world.init_resource::<Assets<Mesh>>();
+    world.init_resource::<Assets<StandardMaterial>>();
+    let proxies = products
+        .into_iter()
+        .map(|(coordinate, mesh)| {
+            let handle = world.resource_mut::<Assets<Mesh>>().add(mesh);
+            let entity = world.spawn(Mesh3d(handle.clone())).id();
+            (coordinate, (entity, handle))
+        })
+        .collect();
+    let (sender, receiver) = mpsc::channel();
+    world.insert_resource(Renderer {
+        surface_sample: Some(sample),
+        shading_budget_fallbacks: 0,
+        shading_authority: default(),
+        shading_metrics: default(),
+        presenter,
+        accepted: default(),
+        visible_objects: default(),
+        publication_revision: 0,
+        terrain_edges: default(),
+        immutable_edges: default(),
+        proxies,
+        hidden_proxies: default(),
+        materials: default(),
+        sender,
+        receiver: Mutex::new(receiver),
+        active: false,
+        epoch: 0,
+    });
+    let identity = (
+        runtime.manifest().fingerprint,
+        runtime.manifest().source_fingerprint,
+    );
+    world.insert_resource(StreamedArena {
+        runtime,
+        edits,
+        overview: Arc::new(map),
+        biomes: None,
+        generation: 0,
+        projected: default(),
+        interest_key: None,
+        next_transaction: 0,
+        policies: default(),
+        failure: None,
+        publication_ms: 0.,
+        peak_resident: 0,
+    });
+    let snapshot = surface_sample_snapshot(&world).unwrap();
+    assert_eq!(snapshot.mode, "crystal-four");
+    assert_eq!(
+        (snapshot.package_fingerprint, snapshot.source_fingerprint),
+        identity
+    );
+    assert_eq!(snapshot.selected_chunks.len(), 4);
+    assert_eq!(snapshot.converted_chunks, 4);
+    assert_eq!(snapshot.published_chunks, 4);
+    assert_eq!(snapshot.vertices, expected_vertices);
+    assert_eq!(snapshot.triangles, expected_indices / 3);
+    assert_eq!(
+        snapshot.packed_bytes,
+        expected_vertices * 40 + expected_indices * 4
+    );
+    assert!(!snapshot.exact_edited_fallback);
+    edit(
+        &mut world.resource_mut::<StreamedArena>().edits,
+        "snapshot-cut",
+        WorldHex::new(7, 7),
+        9,
+        None,
+    );
+    world.resource_scope(|world, mut renderer: Mut<Renderer>| {
+        let products = renderer
+            .surface_sample
+            .as_mut()
+            .unwrap()
+            .refresh(world.resource::<StreamedArena>())
+            .unwrap()
+            .unwrap();
+        for (chunk, mesh) in products {
+            let (_, handle) = renderer
+                .proxies
+                .get(&chunk)
+                .expect("converted sample proxy");
+            *world
+                .resource_mut::<Assets<Mesh>>()
+                .get_mut(handle)
+                .unwrap() = mesh;
+        }
+    });
+    assert!(
+        surface_sample_snapshot(&world)
+            .unwrap()
+            .exact_edited_fallback
+    );
+    let removed = world
+        .resource::<Renderer>()
+        .proxies
+        .values()
+        .next()
+        .unwrap()
+        .1
+        .clone();
+    world.resource_mut::<Assets<Mesh>>().remove(removed.id());
+    assert_eq!(surface_sample_snapshot(&world).unwrap().published_chunks, 3);
+    clear(&mut world);
+    assert!(surface_sample_snapshot(&world).is_none());
+}

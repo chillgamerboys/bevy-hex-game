@@ -7,6 +7,90 @@ use hex_world_runtime::FiniteWorldSession;
 const MAX_VERTICES: usize = 100_000;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 
+/// Read-only facts about the active, published four-chunk diagnostic.
+/// Counts describe retained mesh assets, not pixel coverage or total process memory.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct GrandSurfaceSampleSnapshot {
+    /// Explicit diagnostic mode; absent snapshots never imply activation.
+    pub mode: &'static str,
+    /// Admitted immutable package identity.
+    pub package_fingerprint: u64,
+    /// Admitted canonical authoring identity.
+    pub source_fingerprint: u64,
+    /// Complete source/halo blocks, including blocks that never draw.
+    pub source_chunks: usize,
+    /// Storage coordinates converted by the diagnostic owner.
+    pub selected_chunks: Vec<ChunkId>,
+    /// Successfully converted products in the most recent atomic build.
+    pub converted_chunks: usize,
+    /// Products still attached to their original entity with a retained mesh asset.
+    pub published_chunks: usize,
+    /// Published products whose current Bevy view-visibility flag is true.
+    pub visible_chunks: usize,
+    /// Actual retained vertex count across published products.
+    pub vertices: usize,
+    /// Actual retained index count divided by three.
+    pub triangles: usize,
+    /// Packed position/normal/color/u32-index bytes, excluding allocator/GPU overhead.
+    pub packed_bytes: usize,
+    /// Aggregate packed-output ceiling; not a total or peak memory bound.
+    pub packed_byte_limit: usize,
+    /// Whether persistent source edits selected the exact interval-face rebuild.
+    pub exact_edited_fallback: bool,
+}
+
+/// Inspect actual published diagnostic assets without granting residency or rebuilding.
+/// Returns None before activation, in ordinary/headless runs, and after renderer clear.
+#[must_use]
+pub fn surface_sample_snapshot(world: &World) -> Option<GrandSurfaceSampleSnapshot> {
+    let renderer = world.get_resource::<Renderer>()?;
+    let sample = renderer.surface_sample.as_ref()?;
+    let state = world.get_resource::<StreamedArena>()?;
+    let source = state.overview.terrain_surface.as_ref()?;
+    let assets = world.get_resource::<Assets<Mesh>>()?;
+    let mut result = GrandSurfaceSampleSnapshot {
+        mode: "crystal-four",
+        package_fingerprint: state.runtime.manifest().fingerprint,
+        source_fingerprint: state.runtime.manifest().source_fingerprint,
+        source_chunks: source.chunks.len(),
+        selected_chunks: sample.selected.iter().copied().collect(),
+        converted_chunks: sample.selected.len(),
+        published_chunks: 0,
+        visible_chunks: 0,
+        vertices: 0,
+        triangles: 0,
+        packed_bytes: 0,
+        packed_byte_limit: MAX_BYTES,
+        exact_edited_fallback: sample.exact_edited_fallback,
+    };
+    for chunk in &sample.selected {
+        let Some((entity, handle)) = renderer.proxies.get(chunk) else {
+            continue;
+        };
+        if world
+            .get::<Mesh3d>(*entity)
+            .is_none_or(|mesh| mesh.0 != *handle)
+        {
+            continue;
+        }
+        let Some(mesh) = assets.get(handle) else {
+            continue;
+        };
+        result.published_chunks += 1;
+        result.visible_chunks += usize::from(
+            world
+                .get::<ViewVisibility>(*entity)
+                .is_some_and(|visibility| visibility.get()),
+        );
+        let vertices = mesh.count_vertices();
+        let indices = mesh.indices().map_or(0, Indices::len);
+        result.vertices += vertices;
+        result.triangles += indices / 3;
+        result.packed_bytes += vertices * 40 + indices * 4;
+    }
+    Some(result)
+}
+
 pub(super) fn requested() -> bool {
     std::env::var("HEX_GRAND_SURFACE_SAMPLE").is_ok_and(|value| value == "1")
 }
@@ -14,6 +98,7 @@ pub(super) fn requested() -> bool {
 pub(super) struct State {
     selected: BTreeSet<ChunkId>,
     revisions: BTreeMap<ChunkId, u64>,
+    exact_edited_fallback: bool,
 }
 
 impl State {
@@ -70,6 +155,7 @@ impl State {
             Some(Self {
                 selected,
                 revisions: revisions(source, &state.edits),
+                exact_edited_fallback: has_edits(source, &state.edits, state.overview.level_bounds),
             }),
             meshes,
         ))
@@ -92,6 +178,7 @@ impl State {
         // no asynchronous sample job that can complete against stale edit revisions.
         let products = meshes(&state.overview, &state.edits)?;
         self.revisions = current;
+        self.exact_edited_fallback = has_edits(source, &state.edits, state.overview.level_bounds);
         Ok(Some(products))
     }
 }
@@ -107,6 +194,24 @@ fn revisions(
         .collect()
 }
 
+fn has_edits(
+    source: &TerrainSurfaceOverview,
+    edits: &FiniteWorldSession,
+    levels: [i32; 2],
+) -> bool {
+    source.chunks.iter().any(|c| {
+        (0..16).any(|r| {
+            (0..16).any(|q| {
+                edits.terrain_edited_in_column(
+                    WorldHex::new(c.coordinate.q * 16 + q, c.coordinate.r * 16 + r),
+                    levels[0],
+                    levels[1] + 1,
+                )
+            })
+        })
+    })
+}
+
 fn edited_source(
     map: &NorthernOverview,
     edits: &FiniteWorldSession,
@@ -115,18 +220,7 @@ fn edited_source(
         .terrain_surface
         .as_ref()
         .ok_or("missing sample source")?;
-    let changed = source.chunks.iter().any(|c| {
-        (0..16).any(|r| {
-            (0..16).any(|q| {
-                edits.terrain_edited_in_column(
-                    WorldHex::new(c.coordinate.q * 16 + q, c.coordinate.r * 16 + r),
-                    map.level_bounds[0],
-                    map.level_bounds[1] + 1,
-                )
-            })
-        })
-    });
-    if !changed {
+    if !has_edits(source, edits, map.level_bounds) {
         return Ok(None);
     }
     let palette: BTreeMap<_, _> = map

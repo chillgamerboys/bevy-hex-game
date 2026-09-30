@@ -18,6 +18,7 @@ use std::{
 
 #[path = "grand_surface_sample.rs"]
 mod surface_sample;
+pub use surface_sample::{surface_sample_snapshot, GrandSurfaceSampleSnapshot};
 
 struct Completion {
     shading_authority: BTreeMap<ChunkId, BTreeMap<ChunkId, Option<u64>>>,
