@@ -202,11 +202,6 @@ fn approach(
 ) -> Result<(), String> {
     let start = human(app.world()).feet;
     let first_tick = app.world().resource::<ArenaSession>().tick;
-    app.insert_resource(GroundedWalkTrace::new(
-        GroundedWalkLimits::new(app.world().resource::<ArenaVoxelGeometry>().level_height),
-        first_tick,
-        start,
-    ));
     let mut follower = ObjectFollower::default();
     let mut best = start.with_y(0.0).distance(target.with_y(0.0));
     let mut progress_tick = first_tick;
@@ -260,6 +255,7 @@ fn approach(
         "status":if result.is_ok(){"PASS"}else{"FAIL"},"error":result.as_ref().err(),
         "target":target.to_array(),"start":start.to_array(),"simulation_ticks":app.world().resource::<ArenaSession>().tick-first_tick,
         "samples":samples,"endpoint":body_state(app.world()),"grounding":app.world().get_resource::<GroundedWalkTrace>(),
+        "grounding_scope":"continuous from garden court through reveal and consumption; no reset at discovery or injury setup",
         "path_source":"direct destination selected from actual published fountain liquid cells; ordinary local object steering, no added authored route or relocation",
     });
     result
@@ -363,6 +359,14 @@ fn run(app: &mut App, report: &mut serde_json::Value) -> Result<(), String> {
     }
     app.world_mut().resource_mut::<ViewState>().paused = false;
     let feet = human(app.world()).feet;
+    // Discovery can occur during an ordinary step. Keep that entire airborne
+    // episode across the reveal/consumption boundary instead of restarting its
+    // fall budget when the test applies its explicit injured-health setup.
+    app.insert_resource(GroundedWalkTrace::new(
+        GroundedWalkLimits::new(app.world().resource::<ArenaVoxelGeometry>().level_height),
+        app.world().resource::<ArenaSession>().tick,
+        feet,
+    ));
     let target = *points
         .iter()
         .min_by(|a, b| {
