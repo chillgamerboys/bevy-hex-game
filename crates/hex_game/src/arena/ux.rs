@@ -18,6 +18,62 @@ use hex_arena::{
 use hex_core::arena::{ArenaOverview, ArenaReset, ArenaTerrainView, ArenaVoxelGeometry};
 use serde::{Deserialize, Serialize};
 
+/// Actual observation and map presentation for the opt-in package acceptance.
+/// This installs the existing systems and actual map dots, not a second marker model.
+#[cfg(all(test, feature = "test-support"))]
+pub(super) mod package_observation {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    pub(crate) fn install(app: &mut App) -> Result<(), String> {
+        app.init_resource::<UxState>()
+            .init_resource::<Assets<Image>>()
+            .add_systems(
+                Update,
+                observe.after(ArenaFrame::Tick).before(ArenaFrame::Present),
+            )
+            .add_systems(Update, present_map.in_set(ArenaFrame::Present));
+        app.world_mut()
+            .run_system_once(|mut commands: Commands| {
+                commands.spawn(Node::default()).with_children(|root| {
+                    spawn_map(root, false, 280.0);
+                });
+            })
+            .map_err(|error| format!("actual map fixture: {error}"))
+    }
+
+    pub(crate) fn camera(world: &World) -> Option<(Vec3, Vec3)> {
+        let session = world.resource::<ArenaSession>();
+        let state = world.resource::<ViewState>();
+        let actor = session
+            .actors
+            .iter()
+            .find(|a| Some(a.id) == session.human_actor_id())?;
+        let direction = super::super::aim(state);
+        Some((
+            super::super::camera_origin(session, state, actor, direction),
+            direction,
+        ))
+    }
+
+    pub(crate) fn map_symbols(world: &mut World, position: Option<Vec3>) -> Vec<String> {
+        let expected =
+            position.map(|point| coordinates(world.resource::<ArenaOverview>(), point.xz()));
+        world
+            .query::<(&MapDot, &Node, &Text)>()
+            .iter(world)
+            .filter(|(_, node, _)| node.display != Display::None)
+            .filter(|(_, node, _)| {
+                expected.is_none_or(|at| {
+                    matches!((node.left, node.top), (Val::Percent(x), Val::Percent(y))
+                    if (x - at.x * 100.0).abs() < 0.001 && (y - at.y * 100.0).abs() < 0.001)
+                })
+            })
+            .map(|(_, _, text)| text.0.clone())
+            .collect()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Page {
     #[default]

@@ -9,6 +9,7 @@ with CPU terrain presentation, checking typed residency and sparse-edit retentio
 With --admissions, it verifies all fourteen authored enemy parties and their codec.
 With --walking, both dry walking and the separate walk/swim/walk crossing are required.
 With --sailing, it exercises ordinary boat movement through the same build.
+With --fountain, it checks the actual garden approach, discovery, map and single use.
 This checks persistence, not visual quality or native control feel.
 """
 from __future__ import annotations
@@ -32,6 +33,7 @@ TRAVERSAL_TESTS = {
     "walking": "arena::grand::tests::walking_tests::actual_grand_ordinary_walking",
     "sailing": "arena::grand::tests::sailing_tests::actual_grand_unupgraded_authored_sailing",
     "crossing": "arena::grand::tests::walking_tests::actual_grand_lake_walk_swim_walk",
+    "fountain": "arena::grand::tests::walking_tests::fountain::actual_grand_fountain_observation_and_use",
 }
 
 
@@ -393,6 +395,65 @@ def validate_sailing_course(measurement: dict, start_anchor: str) -> None:
             raise RuntimeError("Boat did not reach its offshore course waypoint")
 
 
+def validate_fountain_receipt(receipt: dict) -> None:
+    """Keep observation, map disclosure and actual consumption as separate proofs."""
+    names = ("occlusion_before_reveal", "undiscovered_before_reveal", "no_undiscovered_map_marker",
+             "visible_acquisition", "discovered_map_marker", "production_consumption",
+             "spent_map_marker", "no_duplicate_heal")
+    assertions = receipt.get("assertions") or {}
+    if (receipt.get("kind") != "grand-fountain-observation-v1" or receipt.get("status") != "PASS"
+            or any(assertions.get(name, {}).get("status") != "PASS" for name in names)):
+        raise RuntimeError("Fountain acceptance lacks a separate successful required assertion")
+    facts = {name: assertions[name].get("facts") or {} for name in names}
+    hidden = facts["occlusion_before_reveal"]
+    leak = facts["no_undiscovered_map_marker"].get("actual_map_symbols", [])
+    discovery = facts["visible_acquisition"]
+    first = discovery.get("first_discovery") or {}
+    if (hidden.get("ray_terrain_ready") is not True or hidden.get("production_sight_clear") is not False
+            or hidden.get("held_simulation_ticks", 0) < 90
+            or facts["undiscovered_before_reveal"].get("discovered") is not None
+            or not leak or any(glyph in leak for glyph in ("+", "○"))
+            or first.get("ray_terrain_ready") is not True or first.get("production_sight_clear") is not True
+            or first.get("tick", 0) <= 0 or first.get("actual_map_symbols", []).count("+") != 1
+            or discovery.get("progress_consumed") is not False
+            or discovery.get("marker", {}).get("id") != "garden_fountain"
+            or discovery.get("marker", {}).get("consumed") is not False):
+        raise RuntimeError("Fountain discovery requires loaded occlusion followed by a real visible sighting")
+    charged = facts["discovered_map_marker"].get("symbols_at_discovered_position", [])
+    spent = facts["spent_map_marker"]
+    used = spent.get("symbols_at_discovered_position", [])
+    if (charged.count("+") != 1 or "○" in charged or used.count("○") != 1 or "+" in used
+            or spent.get("marker", {}).get("consumed") is not True):
+        raise RuntimeError("Fountain charged/spent map markers did not follow known state")
+    consumption = facts["production_consumption"]
+    duplicate = facts["no_duplicate_heal"]
+    numbers = [consumption.get(k) for k in ("before_hp", "after_hp", "expected_hp", "maximum_hp")]
+    numbers += [duplicate.get(k) for k in ("reinjured_hp", "after_hp")]
+    if (any(type(value) not in (int, float) or not math.isfinite(value) for value in numbers)
+            or consumption.get("progress_consumed") is not True
+            or not math.isclose(consumption["expected_hp"],
+                                min(consumption["maximum_hp"], consumption["before_hp"] + 40), abs_tol=0.0001)
+            or not math.isclose(consumption["after_hp"], consumption["expected_hp"], abs_tol=0.0001)
+            or not 0 < consumption["after_hp"] - consumption["before_hp"] <= 40.0001
+            or duplicate.get("held_simulation_ticks", 0) < 90
+            or duplicate.get("looking_away") is not True
+            or duplicate.get("observed_contact_frames", 0) <= 0
+            or duplicate.get("all_observed_frames_inside_fountain") is not True
+            or not math.isclose(duplicate["reinjured_hp"], duplicate["after_hp"], abs_tol=0.0001)):
+        raise RuntimeError("Fountain did not heal once and refuse another grant while still injured")
+    ascent = receipt.get("garden_ascent") or {}
+    if (ascent.get("name") != "garden_ascent" or ascent.get("status") != "PASS"
+            or ascent.get("completed_segments") != ascent.get("required_segments")
+            or ascent.get("simulation_ticks", 0) <= 40):
+        raise RuntimeError("Fountain requires the unchanged ordinary garden ascent")
+    validate_grounded_trace(ascent.get("grounding") or {}, ascent["simulation_ticks"], "garden_ascent")
+    for name in ("reveal_approach", "consumption_approach"):
+        approach = receipt.get(name) or {}
+        if (approach.get("status") != "PASS" or approach.get("target") not in
+                receipt.get("published_fountain", {}).get("surface_points", [])):
+            raise RuntimeError("Fountain final approach must reach actual published water using the controller")
+
+
 def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[str, str],
                       *, sailing_start: str = "sailing_start") -> dict:
     if sailing_start not in ("sailing_start", "sailing_start_bay"):
@@ -416,7 +477,7 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
         raise RuntimeError(f"Actual {mode} failed or did not execute; see {log_path}")
     receipt = json.loads((data / f"{mode}.json").read_text())
     kind = {"walking":"grand-ordinary-walking-r04", "sailing":"grand-authored-sailing-v3",
-            "crossing":"grand-mixed-water-crossing-v1"}[mode]
+            "crossing":"grand-mixed-water-crossing-v1", "fountain":"grand-fountain-observation-v1"}[mode]
     if receipt.get("kind") != kind or receipt.get("status") != "PASS":
         raise RuntimeError(f"Actual {mode} receipt did not report completion")
     if Path(receipt["package"]).resolve() != Path(environment["HEX_GRAND_WORLD"]).resolve():
@@ -425,6 +486,8 @@ def execute_traversal(binary: Path, mode: str, output: Path, environment: dict[s
         validate_walking_receipt(receipt)
     elif mode == "crossing":
         validate_crossing_receipt(receipt)
+    elif mode == "fountain":
+        validate_fountain_receipt(receipt)
     else:
         measurement = receipt.get("measurement", {})
         validate_sailing_course(measurement, sailing_start)
@@ -466,6 +529,7 @@ def main() -> None:
     parser.add_argument("--admissions", action="store_true", help="Also verify all fourteen actual-package enemy parties using the same test build")
     parser.add_argument("--walking", action="store_true", help="Require dry authored connections/foothill probes AND the separate same-endpoint walk-swim-walk crossing")
     parser.add_argument("--sailing", action="store_true", help="Measure both western-shore and starting-bay boat crossings with production input")
+    parser.add_argument("--fountain", action="store_true", help="Verify actual garden approach, fountain discovery/map disclosure and single-use healing")
     parser.add_argument("--timeout", type=float, default=240.0, help="Maximum seconds for each writer/reader process")
     parser.add_argument("--circuit-timeout", type=float, default=420.0, help="Maximum seconds for the optional circuit (internal deadline: 360 seconds)")
     parser.add_argument("--admission-timeout", type=float, default=420.0, help="Maximum seconds for the optional all-party admission oracle")
@@ -506,6 +570,7 @@ def main() -> None:
         "admissions_requested": arguments.admissions,
         "walking_requested": arguments.walking,
         "sailing_requested": arguments.sailing,
+        "fountain_requested": arguments.fountain,
         "cargo_profile": arguments.cargo_profile,
         "cases": [],
     }
@@ -527,7 +592,7 @@ def main() -> None:
                 report["circuit"] = execute_circuit(binary, output, environment, arguments.circuit_timeout)
             if arguments.admissions:
                 report["admissions"] = execute_admissions(binary, output, environment, arguments.admission_timeout)
-            for mode in ("walking", "sailing"):
+            for mode in ("walking", "sailing", "fountain"):
                 if getattr(arguments, mode):
                     if mode == "walking":
                         execute_walking_bundle(binary, output, environment, report)

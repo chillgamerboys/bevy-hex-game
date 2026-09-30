@@ -7,6 +7,9 @@
 use super::*;
 use hex_core::HexCoord;
 
+#[path = "walking_tests/fountain.rs"]
+mod fountain;
+
 const REACHED: f32 = 2.0;
 const STALL_TICKS: u64 = 600;
 const ROUTE_LIMIT: Duration = Duration::from_secs(180);
@@ -933,6 +936,7 @@ fn frame(app: &mut App, direction: Vec3) {
     // The fixture installs the production drive_simulation in Update. It alone
     // runs ArenaTick; there is no direct controller call or position correction.
     app.update();
+    fountain::record_frame(app.world_mut());
 }
 
 fn start_route(app: &mut App, point: Point, stacked: bool) -> Result<Vec3, String> {
@@ -1224,6 +1228,19 @@ fn traverse_route(
             return serde_json::json!({"name":route.name,"category":route.category,"status":"FAIL","phase":"setup","error":error});
         }
     };
+    traverse_started_route(app, route, total_deadline, mixed, start, began)
+}
+
+// A focused observation acceptance can hold at its one initial setup, then walk
+// this unchanged route without performing another relocation to the first point.
+fn traverse_started_route(
+    app: &mut App,
+    route: &Route,
+    total_deadline: Instant,
+    mixed: bool,
+    start: Vec3,
+    began: Instant,
+) -> serde_json::Value {
     let first_tick = app.world().resource::<ArenaSession>().tick;
     let limits = GroundedWalkLimits::new(app.world().resource::<ArenaVoxelGeometry>().level_height);
     let waypoint_reach = WaypointReach::new(

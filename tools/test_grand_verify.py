@@ -68,6 +68,71 @@ class GrandWalkingReceiptTests(unittest.TestCase):
                 grand_verify.validate_walking_receipt(receipt)
 
 
+def valid_fountain() -> dict:
+    marker = dict(id="garden_fountain", consumed=False, position=[10.0, 20.0, 30.0])
+    facts = {
+        "occlusion_before_reveal": dict(ray_terrain_ready=True, production_sight_clear=False,
+                                        held_simulation_ticks=90),
+        "undiscovered_before_reveal": dict(discovered=None),
+        "no_undiscovered_map_marker": dict(actual_map_symbols=["↑"]),
+        "visible_acquisition": dict(marker=marker, progress_consumed=False,
+            first_discovery=dict(tick=100, ray_terrain_ready=True, production_sight_clear=True,
+                                 actual_map_symbols=["+"])),
+        "discovered_map_marker": dict(symbols_at_discovered_position=["+"]),
+        "production_consumption": dict(before_hp=50.0, after_hp=90.0, expected_hp=90.0,
+                                       maximum_hp=100.0, progress_consumed=True),
+        "spent_map_marker": dict(marker=marker | {"consumed": True}, symbols_at_discovered_position=["○"]),
+        "no_duplicate_heal": dict(reinjured_hp=80.0, after_hp=80.0, held_simulation_ticks=90,
+                                  looking_away=True, observed_contact_frames=45,
+                                  all_observed_frames_inside_fountain=True),
+    }
+    ascent = copy.deepcopy(valid_receipt()["routes"][0])
+    ascent["name"] = "garden_ascent"
+    destination = [10.0, 20.0, 30.0]
+    return dict(kind="grand-fountain-observation-v1", status="PASS", garden_ascent=ascent,
+                published_fountain=dict(surface_points=[destination]),
+                reveal_approach=dict(status="PASS", target=destination),
+                consumption_approach=dict(status="PASS", target=destination),
+                assertions={name: dict(status="PASS", facts=value) for name, value in facts.items()})
+
+
+class GrandFountainReceiptTests(unittest.TestCase):
+    def test_separate_complete_fountain_proofs_pass(self):
+        grand_verify.validate_fountain_receipt(valid_fountain())
+
+    def test_missing_observation_or_false_disclosure_proof_cannot_pass(self):
+        changes = (("occlusion_before_reveal", "ray_terrain_ready", False),
+                   ("occlusion_before_reveal", "production_sight_clear", True),
+                   ("occlusion_before_reveal", "held_simulation_ticks", 1),
+                   ("no_undiscovered_map_marker", "actual_map_symbols", ["↑", "+"]),
+                   ("no_undiscovered_map_marker", "actual_map_symbols", []),
+                   ("spent_map_marker", "symbols_at_discovered_position", ["+"]))
+        for name, key, value in changes:
+            with self.subTest(name=name, key=key), self.assertRaises(RuntimeError):
+                receipt = valid_fountain()
+                receipt["assertions"][name]["facts"][key] = value
+                grand_verify.validate_fountain_receipt(receipt)
+        for name in valid_fountain()["assertions"]:
+            with self.subTest(missing=name), self.assertRaises(RuntimeError):
+                receipt = valid_fountain()
+                del receipt["assertions"][name]
+                grand_verify.validate_fountain_receipt(receipt)
+
+    def test_duplicate_reward_bad_health_or_unpublished_approach_cannot_pass(self):
+        for name, key, value in (("production_consumption", "expected_hp", 100.0),
+                                 ("production_consumption", "after_hp", float("nan")),
+                                 ("no_duplicate_heal", "all_observed_frames_inside_fountain", False),
+                                 ("no_duplicate_heal", "after_hp", 90.0)):
+            with self.subTest(name=name, key=key), self.assertRaises(RuntimeError):
+                receipt = valid_fountain()
+                receipt["assertions"][name]["facts"][key] = value
+                grand_verify.validate_fountain_receipt(receipt)
+        with self.assertRaises(RuntimeError):
+            receipt = valid_fountain()
+            receipt["consumption_approach"]["target"] = [1.0, 2.0, 3.0]
+            grand_verify.validate_fountain_receipt(receipt)
+
+
 def valid_crossing() -> dict:
     first = copy.deepcopy(valid_receipt()["routes"][0]["grounding"])
     first["observed_simulation_ticks"] = 101
