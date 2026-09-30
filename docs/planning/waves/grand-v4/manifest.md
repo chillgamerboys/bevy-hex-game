@@ -1,6 +1,73 @@
 # Grand V4 integration wave
 
-## September 30 measured continuation
+## September 30 common-coast package and actual review
+
+Clean `a64f506ab82283b00a67c016618295be7b6bec3d` publishes ordinary immutable
+`compiled-r02-dressed-06-common-coast`: package `6744055940943002088`, source
+`10344533912446709053`. Strict publication/readback passes. The source gate passes
+74 Grand tests and 13 surface tests plus scoped Clippy; eight ignored integration
+tests are separate. This package has 3,323,269 columns, 13,134 chunks and 843
+objects. Mainland is 657,763 columns versus original 93,326: 7.048014×, within
+the fixed-before-measurement 2% tolerance. Crystal independently measures
+22,201/3,169 = 7.005680×.
+
+Common-coast source06 supersedes rejected04/05: it retains the covered outer Air
+spiral and adds four inner turns to the revised summit, with complete natural
+cover. The garden stair uses the canonical exterior field rather than adding a
+second quantization. The coast and physical ground share the chosen landform
+field; old coast truncation is removed. The old volcano remains in this package.
+
+All ten fresh ordinary-controller cases execute. Nineteen of twenty walking
+routes pass, including Crystal, Frozen Woods, garden, all library routes, root
+and Shadow. The west-to-east mixed crossing, both sailing approaches, encounter
+admission, bounded residency circuit and land/boat/air separate-process resumes
+pass. Restart retains full owner state, active attacks, partial damage and edits.
+Sailing measures 39.75 simulated seconds from the western shore and 67.32 from the
+starting bay; no invented tolerance or native motion claim is attached.
+
+The combined receipt remains FAIL for two independent reasons. Western foothill
+uphill stalls 4.38 units before its endpoint on loaded, clear terrain. A 100-unit
+neighborhood comparison identifies broad toe/upper-face steepening, not objects
+or one faulty cell. Its alternate ground-graph connection is not body traversal
+acceptance. Fountain court-to-water access now passes, but visible acquisition
+fails: the all-water center heuristic can select the descending rill while the
+basin is hidden. A world-owned optional top-water observation target is integrated in source,
+preserving legacy defaults and healing cells. Its 37 focused tests and scoped
+Clippy pass; a fresh actual-package rerun is still required before accepting it.
+
+All seven ordinary native originals are independently reviewed at
+`.context/grand-review/a64f506ab82283b00a67c016618295be7b6bec3d/r02-dressed06-common-coast/`.
+This is a focused 7-of-47 matrix, not full static acceptance. Coast and low foreland
+are legible, but the upper complex still has conspicuous triangular/banded
+surfaces. Repeated forest/crown shapes remain. Columns/trees obstruct several
+ground frames; these cannot establish a readable courtyard or lakeside approach.
+The Air camera still selects a lower staircase layer at this package. Two camera
+rebindings are authored for the following package, not retroactive corrections
+to these originals. No pixel-owner or eye/solid inference is made from appearance.
+
+Sparse exact halo storage and bit-identical vertex sharing are integrated but
+ordinary rendering remains inactive. The actual Crystal sample retains identical
+triangles and saves 17.45% packed mesh buffers. Fresh global preflight finds 3,915
+drawn owners (including 227 inland), 6,848 halo columns and 1,009,088 column slots
+within unchanged 4096/1048576 guards. Its 13,184 open boundary edges need actual
+indexed joins; a direct sparse producer is an uncompiled isolated draft.
+Whole-world costs and publication remain open; no FPS/RSS claim follows.
+
+Isolated volcano source05 preserves a coherent filled shield, crater and unequal
+shoulders. Two focused tests and exact 439,362-column export pass with source
+unchanged. Landing/Fire/Dragon share 133,296 ordinary-edge connected columns,
+and all 163,434 dry columns have exact volcanic biome labels. Protected 65-unit
+shore interface and everything outside the 150-unit blend are unchanged. The old
+straight-chord ascent still has 306 excessive steps, so this is not integrated
+or traversally accepted. Rejected earlier studies and the next contour-waypoint
+survey are preserved.
+
+Weekly stop remains 95% consumed, leaving 5%. Latest observed usage is 91%.
+General foothill traversal, visual approval, final volcano/ascent, fountain
+acquisition, global joins, full static/temporal matrix, combined selector CI and
+an authorized 30-minute native play/performance session remain open.
+
+## Earlier September 30 Crystal diagnostic
 
 Clean source `3eefdfa53ac01c9210fc58b09ee6570e464d11b9` publishes immutable
 `compiled-r02-surface-sample-01`: package `8875525449639290247`, source

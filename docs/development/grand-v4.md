@@ -1,12 +1,24 @@
 # Grand V4 candidate
 
-The September 30 integration is still a draft. The current immutable Crystal
-diagnostic corrects four ordinary distant-proxy chunks; it does not switch the
-whole world or accept the redesigned coast/volcano. Fresh land/boat/air
-process-restart checks pass, while actual fountain access still fails before the
-southern landing. See the latest checkpoint in the
-[wave manifest](../planning/waves/grand-v4/manifest.md) for exact source/package
-identities, failed geometry studies and remaining acceptance.
+The September 30 integration remains a draft. The latest ordinary package,
+`compiled-r02-dressed-06-common-coast` at clean `a64f506`, derives coastline and
+physical ground from the same landform field. Mainland/Crystal measure
+7.048014×/7.005680×. The Air stair reaches its revised shrine, and garden
+approach now passes the actual controller. Fresh restart, sailing, encounter
+admission and bounded residency checks pass. Ordinary walking passes 19 of 20
+routes: a western foothill transition still blocks. Fountain discovery also
+fails because the observer can select the visible outlet rill while the basin
+is occluded. These failures remain explicit. The world-owned basin-target fix
+is integrated in source with 37 focused tests and scoped Clippy passing; its
+fresh-package actual-controller verification remains pending.
+
+All seven new native originals were independently inspected. The low coast is
+legible; upper triangular/banded surfaces and repeated forest silhouettes remain,
+and several ground review views are obscured by objects. Static matrix,
+visual approval and native motion/performance are unfinished. The wider renderer
+and revised volcano remain isolated. See the latest checkpoint in the
+[wave manifest](../planning/waves/grand-v4/manifest.md) for exact identities,
+scoped evidence and remaining work.
 
 Grand V4 is a selectable streamed expedition built on `feat/water-lab` at
 `873a2c37eeb8eda23c11d398ce7d68d7965a64db`. The integration branch preserves the

@@ -2351,19 +2351,19 @@
     },
     "grand-garden-ground": {
       "eye": [
-        347,
-        214,
-        612
+        382,
+        211.7,
+        621
       ],
       "target": [
-        381,
-        218,
-        648
+        378,
+        212,
+        639
       ],
       "interest": [
-        347,
-        214,
-        612
+        382,
+        211.7,
+        621
       ],
       "horizontal_span": null,
       "ground": true
@@ -2561,17 +2561,17 @@
     "grand-shrine-air": {
       "eye": [
         -470,
-        316.7,
+        343.7,
         479
       ],
       "target": [
         -470,
-        323,
+        348,
         485
       ],
       "interest": [
         -470,
-        316.7,
+        343.7,
         479
       ],
       "horizontal_span": null,
