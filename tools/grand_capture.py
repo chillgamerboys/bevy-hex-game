@@ -212,8 +212,9 @@ def capture(args: argparse.Namespace) -> int:
     if source["dirty"] and not args.dirty_diagnostic:
         raise RuntimeError("Commit the candidate first, or request --dirty-diagnostic scratch evidence")
     matrix = matrix_contract(args.view)
-    sample = args.presentation_sample
-    if args.sample_render == "baseline" and sample is None:
+    sample = getattr(args, "presentation_sample", None)
+    sample_render = getattr(args, "sample_render", "candidate")
+    if sample_render == "baseline" and sample is None:
         raise RuntimeError("A surface baseline requires the explicit matching diagnostic package")
     if sample is not None and matrix["matrix_scope"] != "FOCUSED-DIAGNOSTIC":
         raise RuntimeError("Presentation samples require an explicitly focused diagnostic capture")
@@ -226,7 +227,7 @@ def capture(args: argparse.Namespace) -> int:
     command = cargo_arguments(args.cargo_profile)
     env, removed = arena.environment(args.target_dir)
     env.update(HEX_GRAND_WORLD=str(args.package), HEX_ARENA_MAP="grand-v4")
-    if sample is not None and args.sample_render == "candidate":
+    if sample is not None and sample_render == "candidate":
         env["HEX_GRAND_SURFACE_SAMPLE"] = "1"
     pack.mkdir(parents=True)
     (pack / "staged.patch").write_bytes(staged)
@@ -241,7 +242,7 @@ def capture(args: argparse.Namespace) -> int:
                "inherited_capability_names_removed": removed, "frames": []}
     if sample is not None:
         receipt.update(content_stage="BOUNDED-SURFACE-DIAGNOSTIC", presentation_sample=sample,
-                       sample_render=args.sample_render,
+                       sample_render=sample_render,
                        presentation_limitations=package["compiler_receipt"].get("diagnostic_presentation_limitations", []))
     print(f"Grand windowless evidence: {pack}", flush=True)
     try:
@@ -267,7 +268,7 @@ def capture(args: argparse.Namespace) -> int:
             row.update(arena.png_info(png))
             row["coverage"] = png_coverage(png, tuple(arena.CANVAS))
             row["native_state"] = validate_native(png.with_suffix(".json"), view, package,
-                                                   sample_render=args.sample_render)
+                                                   sample_render=sample_render)
             if row["sha256"] in hashes:
                 raise RuntimeError(f"Duplicate frame at {view}")
             hashes.add(row["sha256"])
