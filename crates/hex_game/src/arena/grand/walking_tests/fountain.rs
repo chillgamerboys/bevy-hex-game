@@ -256,7 +256,7 @@ fn approach(
         "target":target.to_array(),"start":start.to_array(),"simulation_ticks":app.world().resource::<ArenaSession>().tick-first_tick,
         "samples":samples,"endpoint":body_state(app.world()),"grounding":app.world().get_resource::<GroundedWalkTrace>(),
         "grounding_scope":"continuous from garden court through reveal and consumption; no reset at discovery or injury setup",
-        "path_source":"direct destination selected from actual published fountain liquid cells; ordinary local object steering, no added authored route or relocation",
+        "path_source":"published southern landing then the authored basin column's actual liquid; ordinary local object steering, no relocation",
     });
     result
 }
@@ -269,10 +269,21 @@ fn run(app: &mut App, report: &mut serde_json::Value) -> Result<(), String> {
         .ok_or("missing garden_ascent")?;
     let geometry = *app.world().resource::<ArenaVoxelGeometry>();
     let view = app.world().resource::<ArenaTerrainView>();
-    let pool = view
+    let expedition = view
         .expedition
         .as_ref()
-        .and_then(|s| s.fountains.get(FOUNTAIN))
+        .ok_or("missing published Grand sites")?;
+    let entrance = *expedition
+        .route_nodes
+        .get("fountain_entrance")
+        .ok_or("missing authored southern fountain landing")?;
+    let basin = *expedition
+        .route_nodes
+        .get("fountain_basin")
+        .ok_or("missing authored fountain basin centre")?;
+    let pool = expedition
+        .fountains
+        .get(FOUNTAIN)
         .ok_or("missing published garden_fountain")?;
     let mut tops = BTreeMap::new();
     for cell in &pool.cells {
@@ -288,19 +299,17 @@ fn run(app: &mut App, report: &mut serde_json::Value) -> Result<(), String> {
         .values()
         .map(|at| at.coord.to_world(geometry.top(*at) + 0.01))
         .collect();
-    let first = *points.first().ok_or("empty fountain liquid volume")?;
-    let (min, max) = points
-        .iter()
-        .fold((first, first), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
-    let midpoint = (min + max) * 0.5;
-    let center = *points
-        .iter()
-        .min_by(|a, b| {
-            a.distance_squared(midpoint)
-                .total_cmp(&b.distance_squared(midpoint))
-        })
-        .ok_or("no central fountain water")?;
-    report["published_fountain"] = serde_json::json!({"id":FOUNTAIN,"liquid_voxels":pool.cells.len(),"surface_points":points.iter().map(|p|p.to_array()).collect::<Vec<_>>(),"central_water":center.to_array()});
+    // The former all-liquid bounding box included the descending rill. Use the
+    // world-owned, unchanged basin column, never a target inferred from the
+    // changed shallow-water footprint or an unreported test coordinate.
+    let central_water = *tops
+        .get(&basin.coord)
+        .ok_or("authored basin has no fountain liquid")?;
+    let center = central_water
+        .coord
+        .to_world(geometry.top(central_water) + 0.01);
+    let entrance_target = entrance.coord.to_world(geometry.top(entrance) + 0.0001);
+    report["published_fountain"] = serde_json::json!({"id":FOUNTAIN,"liquid_voxels":pool.cells.len(),"surface_points":points.iter().map(|p|p.to_array()).collect::<Vec<_>>(),"central_water":center.to_array(),"basin_support":basin,"southern_landing":entrance,"target_source":"world-authored basin column and its actual published liquid; not all-liquid bbox"});
     let route_start = *route.points.first().ok_or("empty garden ascent")?;
     let start = start_route(app, route_start, route.stacked)?;
     package_observation::install(app)?;
@@ -367,14 +376,26 @@ fn run(app: &mut App, report: &mut serde_json::Value) -> Result<(), String> {
         app.world().resource::<ArenaSession>().tick,
         feet,
     ));
-    let target = *points
-        .iter()
-        .min_by(|a, b| {
-            a.with_y(0.0)
-                .distance_squared(feet.with_y(0.0))
-                .total_cmp(&b.with_y(0.0).distance_squared(feet.with_y(0.0)))
-        })
-        .ok_or("no published fountain destination")?;
+    // The basin has a deliberately authored southern entrance. Reach its dry
+    // landing with the same strict support predicate as ordinary stair routes;
+    // no input, fall allowance, position or knowledge is injected here.
+    let reach = WaypointReach::new(
+        true,
+        human(app.world()).body_dimensions(),
+        geometry.level_height,
+    );
+    approach(
+        app,
+        entrance_target,
+        report,
+        "southern_landing_approach",
+        deadline,
+        |world| {
+            let player = human(world);
+            reach.reached(player.feet, entrance_target, player.grounded)
+        },
+    )?;
+    let target = center;
     approach(app, target, report, "reveal_approach", deadline, |w| {
         known(w).is_some()
     })?;
