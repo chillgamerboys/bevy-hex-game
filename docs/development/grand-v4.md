@@ -1,30 +1,31 @@
 # Grand V4 candidate
 
-The September 30 integration remains a draft. The latest verified ordinary
-package is `compiled-r02-dressed-07-fountain-basin` at clean `7e3d50a`, with
-package identity `18041799259933078165` and source `3780620259287788177`.
-The unchanged actual fountain test now passes: the hidden basin remains
-undiscovered, visibility reveals it, contact heals 50→90 once, and reinjury plus
-90 simulation ticks does not grant a duplicate heal. Land, boat and airborne
-separate-process resumes pass on this exact package.
+The September 30 integration remains a draft. The latest ordinary published
+trial is `compiled-r02-dressed-08-western-foothill` at clean `7c3ddec`, package
+`3680328822972001374`, source `14020494224394899720`. Strict compilation/readback,
+74 Grand tests, 13 surface tests and scoped Clippy pass. Mainland/Crystal measure
+7.048014×/7.005680×. Fountain and land/boat/air separate-process restart all pass.
+Fountain discovery uses the actual basin and contact healing is one-use.
 
-Its common-coast geometry measures mainland/Crystal 7.048014×/7.005680×.
-The preceding D06 package passes 19 of 20 ordinary walking routes; its western
-foothill uphill failure remains preserved. The integrated lower-buttress trial
-changes only three geography values. Exact source export lowers 6,648 tops,
-retains water/coastline, and grows the bounded body component by 522 gains with
-213 local losses. Full Grand tests and scoped Clippy pass in the isolated source;
-its combined fresh-package actual walk and visual review remain pending.
-The Air review target is lowered to frame the shrine from its corrected summit
-camera. This is a camera change, not proof of readability.
+The candidate controller bundle remains FAIL. The unchanged western uphill walk
+aborts 26.95 units before its endpoint: one airborne episode counts 27 ticks
+against the retained 26-tick physical allowance, with maximum descent 0.350006
+units. The body is grounded and clear at the final sample. These aggregates
+cannot attribute the one-tick excess to terrain or grounding/step timing; a
+bounded opt-in replay is prepared without changing physics, input or assertions.
+The earlier D06 final steep-transition stall remains untested by this aborted
+trial. Exact source export grows the bounded body component by 522 gains with
+213 local losses; neither net growth nor one selected route establishes broad
+hillside acceptance.
 
-All seven new native originals were independently inspected. The low coast is
-legible; upper triangular/banded surfaces and repeated forest silhouettes remain,
-and several ground review views are obscured by objects. Static matrix,
-visual approval and native motion/performance are unfinished. The wider renderer
-and revised volcano remain isolated. See the latest checkpoint in the
-[wave manifest](../planning/waves/grand-v4/manifest.md) for exact identities,
-scoped evidence and remaining work.
+All four new native originals are independently inspected. The lower foothill
+strip is open and garden columns/steps/basin are more readable, but the garden
+remains sparse. The Air frame does not establish shrine readability. Mountain
+curtains, the cylindrical Crystal opening and repeated forest/crown forms remain
+visual concerns. This is a partial 4-of-47 static review, not visual acceptance.
+The inactive wider renderer and revised volcano remain isolated; final movement,
+static/motion matrix, combined CI and native performance remain open. See the
+[wave manifest](../planning/waves/grand-v4/manifest.md) for scoped evidence.
 
 Grand V4 is a selectable streamed expedition built on `feat/water-lab` at
 `873a2c37eeb8eda23c11d398ce7d68d7965a64db`. The integration branch preserves the

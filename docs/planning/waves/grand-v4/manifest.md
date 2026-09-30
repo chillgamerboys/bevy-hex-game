@@ -1,5 +1,35 @@
 # Grand V4 integration wave
 
+## September 30 P08 trial and completed native review
+
+Clean `7c3ddec2d2157a453a9062d8ec9bea8a7335e48c` strictly publishes
+`compiled-r02-dressed-08-western-foothill`, package `3680328822972001374`, source
+`14020494224394899720`. Source gates pass 74 Grand tests, 13 surface tests and
+scoped Clippy. Package counts and area remain the same as D06/P07.
+
+The focused candidate bundle executes the unchanged western uphill walk,
+fountain and independent land/boat/air restarts. Fountain and all restarts pass;
+walking fails with a 27-tick airborne episode versus the existing 26-tick limit,
+maximum unsupported descent 0.350006 units. It aborts 26.947 units before the
+endpoint, so it does not prove the earlier D06 final stall is fixed. Final body,
+support and loading are valid. The aggregate receipt cannot classify timing or
+terrain causality. An isolated 40-tick opt-in replay is being validated with
+physics, input, route and all acceptance limits unchanged.
+
+Four fresh ordinary native originals are complete and independently reviewed:
+`.context/grand-review/7c3ddec2d2157a453a9062d8ec9bea8a7335e48c/r02-dressed08-western-foothill/`.
+The package/source are unchanged through the combined run. Mechanical capture
+is PARTIAL_COMPLETE (4/47); overall bundle remains FAIL. The lower strip is open,
+garden courtyard/basin framing improves but remains sparse, and Air framing
+still does not establish shrine readability. No missing-object or inside-solid
+claim follows from pixels. Overview curtains, Crystal cylinder and repetitive
+vegetation remain. These originals do not establish motion or visual acceptance.
+
+The inactive direct sparse producer and optional sealed legacy-bed binding are
+staged in the runtime lane with formatting/diff checks only. Rust gates, actual
+connecting faces and whole-world costs are still pending; ordinary export stays
+unchanged. Latest observed weekly usage is 94%; stop at 95%, leaving 5%.
+
 ## September 30 fountain acceptance and lower foothill trial
 
 Clean `7e3d50a35fd54f6f4deffe936963d815e104c330` publishes ordinary immutable
