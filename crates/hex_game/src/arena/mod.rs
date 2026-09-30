@@ -172,6 +172,41 @@ fn encounter_name(encounter: ArenaEncounter) -> &'static str {
     }
 }
 
+// Two million retained f64 values use about 16 MiB, allocated only as frames arrive.
+// The simulation trace is diagnostic context, separate from wall-frame percentiles.
+const FRAME_TIMING_SAMPLE_LIMIT: usize = 1_000_000;
+const SIMULATION_TIMING_SAMPLE_LIMIT: usize = 36_000;
+
+#[derive(serde::Serialize)]
+struct TimingSeriesCoverage {
+    sample_limit: usize,
+    observed_samples: u64,
+    retained_samples: usize,
+    dropped_samples: u64,
+}
+
+impl TimingSeriesCoverage {
+    fn new(sample_limit: usize, observed_samples: u64, retained_samples: usize) -> Self {
+        Self {
+            sample_limit,
+            observed_samples,
+            retained_samples,
+            dropped_samples: observed_samples
+                .saturating_sub(u64::try_from(retained_samples).unwrap_or(u64::MAX)),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct FrameTimingCoverage {
+    elapsed_wall_ms: f64,
+    retained_wall_ms: f64,
+    engine: TimingSeriesCoverage,
+    wall: TimingSeriesCoverage,
+    simulation: TimingSeriesCoverage,
+    full_session_frame_percentiles_allowed: bool,
+}
+
 #[derive(Resource)]
 struct ViewState {
     forest_preparation: bootstrap::Preparation,
@@ -199,7 +234,10 @@ struct ViewState {
     accumulator: f64,
     reset_seen: u64,
     frame_times: Vec<f64>,
+    frame_timing_samples: u64,
+    frame_timing_started_at: Option<std::time::Instant>,
     simulation_frame_times: Vec<f64>,
+    simulation_timing_samples: u64,
     app_started_at: std::time::Instant,
     previous_frame_at: Option<std::time::Instant>,
     frame_wall_intervals: Vec<f64>,
@@ -267,7 +305,10 @@ impl Default for ViewState {
             accumulator: 0.0,
             reset_seen: 0,
             frame_times: Vec::new(),
+            frame_timing_samples: 0,
+            frame_timing_started_at: None,
             simulation_frame_times: Vec::new(),
+            simulation_timing_samples: 0,
             app_started_at: std::time::Instant::now(),
             previous_frame_at: None,
             frame_wall_intervals: Vec::new(),
@@ -297,14 +338,55 @@ impl Default for ViewState {
 
 impl ViewState {
     fn record_frame_timing(&mut self, now: std::time::Instant, engine_delta: f64) {
-        if self.frame_times.len() < 36_000 {
+        self.frame_timing_started_at.get_or_insert(now);
+        self.frame_timing_samples = self.frame_timing_samples.saturating_add(1);
+        if self.frame_times.len() < FRAME_TIMING_SAMPLE_LIMIT {
             self.frame_times.push(engine_delta * 1000.0);
         }
         if let Some(previous) = self.previous_frame_at.replace(now) {
-            if self.frame_wall_intervals.len() < 36_000 {
+            if self.frame_wall_intervals.len() < FRAME_TIMING_SAMPLE_LIMIT {
                 self.frame_wall_intervals
                     .push(now.saturating_duration_since(previous).as_secs_f64() * 1000.0);
             }
+        }
+    }
+
+    fn record_simulation_frame_timing(&mut self, milliseconds: f64) {
+        self.simulation_timing_samples = self.simulation_timing_samples.saturating_add(1);
+        if self.simulation_frame_times.len() < SIMULATION_TIMING_SAMPLE_LIMIT {
+            self.simulation_frame_times.push(milliseconds);
+        }
+    }
+
+    fn frame_timing_coverage(&self) -> FrameTimingCoverage {
+        let engine = TimingSeriesCoverage::new(
+            FRAME_TIMING_SAMPLE_LIMIT,
+            self.frame_timing_samples,
+            self.frame_times.len(),
+        );
+        let wall = TimingSeriesCoverage::new(
+            FRAME_TIMING_SAMPLE_LIMIT,
+            self.frame_timing_samples.saturating_sub(1),
+            self.frame_wall_intervals.len(),
+        );
+        let full_session_frame_percentiles_allowed =
+            wall.observed_samples > 0 && engine.dropped_samples == 0 && wall.dropped_samples == 0;
+        FrameTimingCoverage {
+            elapsed_wall_ms: self
+                .previous_frame_at
+                .zip(self.frame_timing_started_at)
+                .map_or(0.0, |(last, first)| {
+                    last.saturating_duration_since(first).as_secs_f64() * 1000.0
+                }),
+            retained_wall_ms: self.frame_wall_intervals.iter().sum(),
+            engine,
+            wall,
+            simulation: TimingSeriesCoverage::new(
+                SIMULATION_TIMING_SAMPLE_LIMIT,
+                self.simulation_timing_samples,
+                self.simulation_frame_times.len(),
+            ),
+            full_session_frame_percentiles_allowed,
         }
     }
 
@@ -1420,11 +1502,9 @@ fn drive_simulation(world: &mut World) {
         final_tick.saturating_sub(tick_before_frame)
     };
     let mut state = world.resource_mut::<ViewState>();
-    if state.simulation_frame_times.len() < 36_000 {
-        state
-            .simulation_frame_times
-            .push(f64::from(u32::try_from(ticks_advanced).unwrap_or(0)) * FIXED_SECONDS * 1000.0);
-    }
+    state.record_simulation_frame_timing(
+        f64::from(u32::try_from(ticks_advanced).unwrap_or(0)) * FIXED_SECONDS * 1000.0,
+    );
     show_terminal_menu(world);
 }
 
@@ -2137,7 +2217,9 @@ fn capture_frame(
         ("engine_time_delta_ms", serde_json::json!(state.frame_times)),
         ("simulation_frame_dt_ms", serde_json::json!(state.simulation_frame_times)),
         ("app_frame_wall_intervals_ms", serde_json::json!(state.frame_wall_intervals)),
+        ("frame_timing_coverage", serde_json::json!(state.frame_timing_coverage())),
         ("frame_timing_note", serde_json::json!("Instant start-to-start of consecutive main app Update frames; includes scheduler and render-submission waits, not GPU execution or vsync timing. Simulation dt is a separate engine clock.")),
+        ("frame_timing_scope", serde_json::json!("App lifetime from the first recorded Update start, including loading, menus, pauses and round changes. Arrays retain their original prefix; observed and dropped counts keep advancing after capacity. Full-session frame percentiles require frame_timing_coverage.full_session_frame_percentiles_allowed; a complete record alone does not establish active-play duration or native performance.")),
         ("frame_interval_indexing", serde_json::json!("Wall interval index 0 spans Update starts at frame 1 to 2 and includes frame 1 work; stress tick rows identify their containing app frame.")),
         ("tick_samples", serde_json::json!(tick_samples)),
         ("battle_ui", serde_json::json!(ui.as_ref().map(|ui|ui.snapshot()))),

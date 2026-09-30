@@ -1809,7 +1809,17 @@ fn encounter_hud_reveals_only_whole_party_completion() {
 fn frame_wall_timing_is_independent_from_manual_simulation_delta() {
     let mut state = ViewState::default();
     let start = std::time::Instant::now();
+    assert!(
+        !state
+            .frame_timing_coverage()
+            .full_session_frame_percentiles_allowed
+    );
     state.record_frame_timing(start, 1.0 / 60.0);
+    assert!(
+        !state
+            .frame_timing_coverage()
+            .full_session_frame_percentiles_allowed
+    );
     state.record_frame_timing(start + std::time::Duration::from_millis(40), 1.0 / 60.0);
     assert_eq!(state.frame_wall_intervals.len(), 1);
     let interval = state
@@ -1821,6 +1831,14 @@ fn frame_wall_timing_is_independent_from_manual_simulation_delta() {
         .frame_times
         .iter()
         .all(|dt| (*dt - 1000.0 / 60.0).abs() < 0.001));
+    let coverage = state.frame_timing_coverage();
+    assert!(coverage.full_session_frame_percentiles_allowed);
+    assert_eq!(coverage.engine.observed_samples, 2);
+    assert_eq!(coverage.wall.observed_samples, 1);
+    assert_eq!(coverage.engine.dropped_samples, 0);
+    assert_eq!(coverage.wall.dropped_samples, 0);
+    assert!((coverage.elapsed_wall_ms - 40.0).abs() < 0.001);
+    assert!((coverage.retained_wall_ms - 40.0).abs() < 0.001);
     let mut fixture = app(60);
     fixture.world_mut().resource_mut::<ViewState>().pause();
     fixture.update();
@@ -1830,6 +1848,88 @@ fn frame_wall_timing_is_independent_from_manual_simulation_delta() {
         .last()
         .is_some_and(|dt| dt.abs() < 0.001));
     assert!(paused.frame_times.last().is_some_and(|dt| *dt > 16.0));
+}
+
+#[test]
+fn frame_timing_capacity_reports_lost_samples_without_replacing_its_prefix() {
+    let mut state = ViewState::default();
+    let start = std::time::Instant::now();
+    let limit = u64::try_from(FRAME_TIMING_SAMPLE_LIMIT).expect("bounded sample limit");
+    for index in 0..limit {
+        state.record_frame_timing(start + std::time::Duration::from_millis(index * 2), 0.002);
+    }
+    let complete = state.frame_timing_coverage();
+    assert!(complete.full_session_frame_percentiles_allowed);
+    assert!(complete.elapsed_wall_ms > 30.0 * 60.0 * 1000.0);
+    state.record_frame_timing(
+        start + std::time::Duration::from_millis(limit * 2 + 4),
+        0.009,
+    );
+    let first_overflow = state.frame_timing_coverage();
+    assert_eq!(first_overflow.engine.dropped_samples, 1);
+    assert_eq!(first_overflow.wall.dropped_samples, 0);
+    assert!(!first_overflow.full_session_frame_percentiles_allowed);
+    state.record_frame_timing(
+        start + std::time::Duration::from_millis(limit * 2 + 11),
+        0.013,
+    );
+    let coverage = state.frame_timing_coverage();
+    assert_eq!(state.frame_times.len(), FRAME_TIMING_SAMPLE_LIMIT);
+    assert_eq!(state.frame_wall_intervals.len(), FRAME_TIMING_SAMPLE_LIMIT);
+    assert_eq!(coverage.engine.observed_samples, limit + 2);
+    assert_eq!(coverage.engine.dropped_samples, 2);
+    assert_eq!(coverage.wall.observed_samples, limit + 1);
+    assert_eq!(coverage.wall.dropped_samples, 1);
+    assert!(!coverage.full_session_frame_percentiles_allowed);
+    assert!((coverage.elapsed_wall_ms - coverage.retained_wall_ms - 7.0).abs() < 0.001);
+    assert!(state
+        .frame_times
+        .iter()
+        .all(|value| (*value - 2.0).abs() < 0.001));
+    assert!(state
+        .frame_wall_intervals
+        .first()
+        .is_some_and(|value| (*value - 2.0).abs() < 0.001));
+    assert!(state
+        .frame_wall_intervals
+        .last()
+        .is_some_and(|value| (*value - 6.0).abs() < 0.001));
+}
+
+#[test]
+fn simulation_timing_truncation_is_explicit_and_separate_from_frame_coverage() {
+    let mut state = ViewState::default();
+    let start = std::time::Instant::now();
+    state.record_frame_timing(start, 0.01);
+    state.record_frame_timing(start + std::time::Duration::from_millis(10), 0.01);
+    for _ in 0..SIMULATION_TIMING_SAMPLE_LIMIT {
+        state.record_simulation_frame_timing(8.0);
+    }
+    state.record_simulation_frame_timing(0.0);
+    let coverage = state.frame_timing_coverage();
+    assert_eq!(
+        coverage.simulation.retained_samples,
+        SIMULATION_TIMING_SAMPLE_LIMIT
+    );
+    assert_eq!(coverage.simulation.dropped_samples, 1);
+    assert!(coverage.full_session_frame_percentiles_allowed);
+    assert!(state
+        .simulation_frame_times
+        .iter()
+        .all(|value| (*value - 8.0).abs() < 0.001));
+    let serialized = serde_json::to_value(coverage).expect("coverage receipt");
+    assert_eq!(
+        serialized
+            .pointer("/simulation/dropped_samples")
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        serialized
+            .get("full_session_frame_percentiles_allowed")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
 }
 
 #[test]
