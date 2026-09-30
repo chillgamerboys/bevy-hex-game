@@ -122,7 +122,23 @@ impl Layered {
         open: bool,
         open_ends: [bool; 2],
     ) -> Result<(), ContractError> {
-        let supports = centerline(g, points)?;
+        let natural_surface = |p, fallback| {
+            let xz = g.model_xz(p);
+            g.document.as_ref().map_or(fallback, |d| {
+                g.top_level(
+                    oracle::mainland(d, xz, coast_distance(coast, p)).max(oracle::volcano(d, xz)),
+                )
+            })
+        };
+        let mut supports = centerline(g, points)?;
+        if id == "garden_ascent" {
+            // The shared garden field already grades the entire approach and
+            // its court shoulders. A second waypoint-to-hex quantization cuts
+            // lower strips into that field and creates two-level cross-steps.
+            for support in &mut supports {
+                support.level = natural_surface(support.column, support.level + 1) - 1;
+            }
+        }
         let radius = (g.length(width) * 0.5 / 1.5).ceil() as i64 + 1;
         let max_distance = g.length(width) * 0.5;
         let mut candidates: BTreeMap<WorldHex, Vec<(i32, f64)>> = BTreeMap::new();
@@ -205,7 +221,7 @@ impl Layered {
                 // Where a ribbon edge enters its room across an ordinary
                 // one-level threshold, the room floor is the composed support.
                 // Publish that floor rather than a buried pre-union stair cap.
-                let top = self
+                let mut top = self
                     .columns
                     .get(&p)
                     .into_iter()
@@ -218,12 +234,10 @@ impl Layered {
                     })
                     .map_or(top, |room| room.top);
                 let xz = g.model_xz(p);
-                let natural_top = g.document.as_ref().map_or(top, |d| {
-                    g.top_level(
-                        oracle::mainland(d, xz, coast_distance(coast, p))
-                            .max(oracle::volcano(d, xz)),
-                    )
-                });
+                let natural_top = natural_surface(p, top);
+                if id == "garden_ascent" {
+                    top = natural_top;
+                }
                 // A passage can emerge through its intended terminal when the
                 // natural cover ends. It must never extrude a ridge to hide it.
                 let terminal_radius = width * 4.;
@@ -893,6 +907,72 @@ mod cave_cover_tests {
     }
 
     #[test]
+    fn library_air_stair_reaches_the_actual_summit_shrine() {
+        let compiler = tests::compiler(false);
+        let route = compiler
+            .layered
+            .routes
+            .iter()
+            .find(|route| route.id == "library_air")
+            .expect("authored upper-library stair");
+        let anchor = |id: &str| {
+            compiler
+                .anchors
+                .iter()
+                .find(|anchor| anchor.id == id)
+                .expect("published route destination")
+                .position
+        };
+        assert_eq!(
+            route.supports.first().copied(),
+            Some(anchor("grand/anchor/library_upper")),
+            "the spiral starts on the actual upper-library floor"
+        );
+        let shrine = anchor("grand/anchor/shrine_air");
+        assert_eq!(
+            shrine.level,
+            compiler.r02_surface(shrine.column).level,
+            "the summit landing meets natural rock instead of an elevated end plug"
+        );
+        assert_eq!(
+            route.supports.last().copied(),
+            Some(shrine),
+            "a clear buried stair is not an arrival at the summit shrine"
+        );
+        assert!(
+            compiler
+                .layered
+                .columns
+                .get(&shrine.column)
+                .into_iter()
+                .flatten()
+                .any(|layer| layer.layer == SupportLayer::LibraryUpper
+                    && layer.top == shrine.level + 1
+                    && layer.open),
+            "the terminal must emerge at the exterior summit"
+        );
+        for support in route.supports.iter().chain(&route.ribbon) {
+            assert!(
+                compiler.clear_support(*support, 8),
+                "Air stair lacks physical body space at {support:?}"
+            );
+        }
+        for pair in route.supports.windows(2) {
+            let [a, b] = pair else { unreachable!() };
+            assert!(
+                a.column.checked_distance(b.column).expect("bounded stair") <= 1
+                    && a.level.abs_diff(b.level) <= 1,
+                "Air stair requires an impossible step {a:?} -> {b:?}"
+            );
+        }
+        eprintln!(
+            "AIR_SUMMIT_JOIN supports={} ribbon={} actual_shrine={shrine:?}",
+            route.supports.len(),
+            route.ribbon.len()
+        );
+    }
+
+    #[test]
     fn all_authored_route_ribbons_keep_full_body_clearance() {
         let compiler = tests::compiler(false);
         let mut failures = Vec::new();
@@ -952,6 +1032,61 @@ mod cave_cover_tests {
             }
         }
     }
+    #[test]
+    fn garden_ascent_ribbon_does_not_add_steps_across_the_court() {
+        let compiler = tests::compiler(false);
+        let route = compiler
+            .layered
+            .routes
+            .iter()
+            .find(|route| route.id == "garden_ascent")
+            .expect("authored garden approach");
+        let actual_top = |p| {
+            compiler
+                .column(p)
+                .0
+                .runs
+                .iter()
+                .filter(|run| run.material != "water")
+                .map(|run| run.top)
+                .max()
+                .expect("court terrain")
+        };
+        let failure_edge = [WorldHex::new(736, -286), WorldHex::new(736, -285)];
+        assert!(
+            actual_top(failure_edge[0]).abs_diff(actual_top(failure_edge[1])) <= 1,
+            "the observed court-to-fountain crossing must not drop two levels"
+        );
+        let mut crossings = 0;
+        for support in &route.ribbon {
+            let surface = compiler.r02_surface(support.column);
+            assert_eq!(
+                support.level, surface.level,
+                "the garden tread and broad court use the same graded surface"
+            );
+            assert_eq!(actual_top(support.column), surface.level + 1);
+            for neighbor in support.column.neighbors().expect("bounded garden") {
+                let adjacent = compiler.r02_surface(neighbor);
+                if surface.water.is_none()
+                    && adjacent.water.is_none()
+                    && surface.level.abs_diff(adjacent.level) <= 1
+                {
+                    assert!(
+                        actual_top(support.column).abs_diff(actual_top(neighbor)) <= 1,
+                        "a graded court crossing gained an extra step at {:?}->{neighbor:?}",
+                        support.column
+                    );
+                    crossings += 1;
+                }
+            }
+        }
+        assert!(crossings > route.ribbon.len());
+        eprintln!(
+            "GARDEN_COURT_CROSSINGS ribbon={} gentle_dry_edges={crossings}",
+            route.ribbon.len()
+        );
+    }
+
     #[test]
     fn garden_landing_has_a_shallow_water_join_and_open_court_route() {
         let compiler = tests::compiler(true);

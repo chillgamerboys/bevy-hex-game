@@ -17,6 +17,12 @@ pub struct GrandGeographyDocument {
     pub calibration: String,
     pub(super) transform: GeographyTransform,
     pub(super) coast: Coast,
+    /// Use the same selected landform for coastline measurement and terrain.
+    #[serde(default)]
+    pub(super) landform_coast: bool,
+    /// Broad basin-relative backing beneath the selected northern landforms.
+    #[serde(default)]
+    pub(super) basin_backing: Option<BasinBacking>,
     pub(super) foothills: Foothills,
     #[serde(default)]
     pub(super) interior_profile: Option<InteriorProfile>,
@@ -126,6 +132,9 @@ shape!(UpperMountainBody {name: String, spine: Vec<[f64; 4]>});
 // Shared landform before lake, ascent and cave carving. Broad spines are
 // absolute sea-relative relief, not extra height added once per landmark.
 shape!(MountainEnvelope {shore_blend: f64, bodies: Vec<EnvelopeBody>});
+// Backing spine heights are offsets above the lower-lake datum. The sea blend
+// keeps the positive valley base continuous without reviving a coast clamp.
+shape!(BasinBacking {sea_blend_height: f64, bodies: Vec<EnvelopeBody>});
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct EnvelopeBody {
@@ -282,30 +291,32 @@ impl GrandGeographyDocument {
                         .is_some_and(|(a, b)| (a[0] - b[0]).hypot(a[2] - b[2]) > 0.01)
                 })
         };
-        if self.upper_mountain_bodies.as_ref().is_some_and(|profile| {
-            !(120. ..=170.).contains(&profile.height_transition[0])
-                || !(profile.height_transition[0] + 30. ..=230.)
-                    .contains(&profile.height_transition[1])
-                || !(0. ..=50.).contains(&profile.maximum_uplift)
-                || !(0.1..=0.4).contains(&profile.edge_blend_fraction)
-                || !bounded(profile.bodies.len(), 1, 3)
-                || profile.bodies.iter().any(|body| {
-                    body.name.is_empty()
-                        || body.name.len() > 64
-                        || !bounded(body.spine.len(), 2, 8)
-                        || body.spine.iter().any(|node| {
-                            !position([node[0], node[1]])
-                                || !(self.upper_lake.level..=360.).contains(&node[2])
-                                || !(40. ..=160.).contains(&node[3])
-                        })
-                        || body.spine.windows(2).any(|nodes| {
-                            nodes
-                                .first()
-                                .zip(nodes.get(1))
-                                .is_none_or(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]) < 1.)
-                        })
-                })
-        }) {
+        if (self.landform_coast && self.mountain_envelope.is_none())
+            || self.upper_mountain_bodies.as_ref().is_some_and(|profile| {
+                !(120. ..=170.).contains(&profile.height_transition[0])
+                    || !(profile.height_transition[0] + 30. ..=230.)
+                        .contains(&profile.height_transition[1])
+                    || !(0. ..=50.).contains(&profile.maximum_uplift)
+                    || !(0.1..=0.4).contains(&profile.edge_blend_fraction)
+                    || !bounded(profile.bodies.len(), 1, 3)
+                    || profile.bodies.iter().any(|body| {
+                        body.name.is_empty()
+                            || body.name.len() > 64
+                            || !bounded(body.spine.len(), 2, 8)
+                            || body.spine.iter().any(|node| {
+                                !position([node[0], node[1]])
+                                    || !(self.upper_lake.level..=360.).contains(&node[2])
+                                    || !(40. ..=160.).contains(&node[3])
+                            })
+                            || body.spine.windows(2).any(|nodes| {
+                                nodes
+                                    .first()
+                                    .zip(nodes.get(1))
+                                    .is_none_or(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]) < 1.)
+                            })
+                    })
+            })
+        {
             return Err(ContractError::new(
                 "grand.upper_mountains",
                 "invalid bounded upper-rock bodies",
@@ -338,6 +349,34 @@ impl GrandGeographyDocument {
             return Err(ContractError::new(
                 "grand.mountain_envelope",
                 "invalid connected mountain envelope",
+            ));
+        }
+        if self.basin_backing.as_ref().is_some_and(|profile| {
+            !self.landform_coast
+                || !(12. ..=60.).contains(&profile.sea_blend_height)
+                || !bounded(profile.bodies.len(), 1, 4)
+                || profile.bodies.iter().any(|body| {
+                    !(1. ..=2.).contains(&body.lower_slope_power)
+                        || !(0. ..=0.45).contains(&body.crest_rounding_radius)
+                        || body.name.is_empty()
+                        || body.name.len() > 64
+                        || !bounded(body.spine.len(), 2, 8)
+                        || body.spine.iter().any(|node| {
+                            !position([node[0], node[1]])
+                                || !(0. ..=100.).contains(&node[2])
+                                || !(150. ..=500.).contains(&node[3])
+                        })
+                        || body.spine.windows(2).any(|nodes| {
+                            nodes
+                                .first()
+                                .zip(nodes.get(1))
+                                .is_none_or(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]) < 1.)
+                        })
+                })
+        }) {
+            return Err(ContractError::new(
+                "grand.basin_backing",
+                "invalid broad basin-relative backing",
             ));
         }
         let f = &self.foothills;

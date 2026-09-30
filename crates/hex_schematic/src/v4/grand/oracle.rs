@@ -60,9 +60,12 @@ pub(super) fn foothill_weight(d: &GrandGeographyDocument, point: [f64; 2]) -> f6
 pub(super) fn foothill_region(d: &GrandGeographyDocument, point: [f64; 2]) -> bool {
     foothill_weight(d, point) > 0.01
 }
-/// Frozen continuous landform intersection defines the approved coast. The
-/// spatial relief below changes its interior profile, not its positive domain.
+/// Coast measurement samples the active common field when requested. Older
+/// documents retain their historical frozen reference and interior sampler.
 pub(super) fn coast_reference(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
+    if d.landform_coast {
+        return finish_terrain(d, [x, z], common_landform(d, [x, z]));
+    }
     let co = &d.coast;
     let r = ellipse([x, z], co.center, co.radii);
     let a = (z - co.center[1]).atan2(x);
@@ -124,6 +127,12 @@ pub(super) fn coast_reference(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f
 /// Coast distance comes from the same exact measured hex footprint used by the
 /// compiler; cave cover, detailed columns and overview all call this sampler.
 pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_distance: f64) -> f64 {
+    if d.landform_coast {
+        // The measured coastline and rendered/physical ground are identical
+        // samples. Coast distance is still available to placement systems, but
+        // it no longer truncates the actual authored landform at an old mask.
+        return coast_reference(d, [x, z]);
+    }
     if coast_distance <= 0. {
         return coast_reference(d, [x, z]);
     }
@@ -236,9 +245,98 @@ pub(super) fn mainland(d: &GrandGeographyDocument, [x, z]: [f64; 2], coast_dista
     finish_terrain(d, [x, z], upper_mountain_bodies(d, [x, z], height))
 }
 
-/// Compose one continuous ridge-and-spur envelope before any landmark cuts.
-/// The gentle outer tails and broad connected saddles belong to the landform;
-/// they are not a separate steep skirt around each route or lake.
+/// The selected ridge-and-spur bodies own their continuous feet and sea
+/// intersection. Obsolete massif/peak aprons no longer add a second outline.
+fn common_landform(d: &GrandGeographyDocument, point: [f64; 2]) -> f64 {
+    let base = common_landform_base(d, point);
+    let backing = basin_backing(d, point, base);
+    common_landform_envelope(d, point, backing)
+}
+
+/// Compose the northern forest foot and lake backing before the upper bodies.
+/// Only positive valley base receives relief; neither a room nor a route can
+/// select support here. A smooth zero-slope sea join preserves the raw sign.
+fn basin_backing(d: &GrandGeographyDocument, point: [f64; 2], base: f64) -> f64 {
+    let Some(profile) = &d.basin_backing else {
+        return base;
+    };
+    if base <= 0. {
+        return base;
+    }
+    let sea_weight = 1. - (-(base / profile.sea_blend_height).powi(2)).exp();
+    let mut height = base;
+    for body in &profile.bodies {
+        for pair in body.spine.windows(2) {
+            let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
+                continue;
+            };
+            let (distance, t) = segment(point, [a[0], a[1]], [b[0], b[1]]);
+            let crest = d.lower_lake.level + a[2] * (1. - t) + b[2] * t;
+            let radius = distance / (a[3] * (1. - t) + b[3] * t);
+            if radius < 1. {
+                height = height.max(
+                    base + (crest - base).max(0.)
+                        * sea_weight
+                        * envelope_weight(
+                            radius,
+                            body.lower_slope_power,
+                            body.crest_rounding_radius,
+                        ),
+                );
+            }
+        }
+    }
+    height
+}
+
+fn common_landform_base(d: &GrandGeographyDocument, [x, z]: [f64; 2]) -> f64 {
+    let f = &d.foothills;
+    let co = &d.coast;
+    let r = ellipse([x, z], co.center, co.radii);
+    let angle = (z - co.center[1]).atan2(x - co.center[0]);
+    let shore = 1.
+        + 0.055 * (5. * angle + co.phase).sin()
+        + 0.035 * (9. * angle + 0.3).cos()
+        + 0.025 * (13. * angle).sin();
+    let [start, end] = f.coast_noise_fade;
+    let coastal = 1. + (shore - 1.) * smooth((r - start) / (end - start));
+    let mut base = 42. * (coastal - r) + f.base_noise * noise(x, z);
+    for &[cx, cz, rx, rz] in &co.coves {
+        base -= 35. * (-2. * ellipse([x, z], [cx, cz], [rx, rz]).powi(2)).exp();
+    }
+    for &[cx, cz, height, rx, rz] in &d.low_hills {
+        base += height * (-ellipse([x, z], [cx, cz], [rx, rz]).powi(2)).exp();
+    }
+    base
+}
+
+fn common_landform_envelope(d: &GrandGeographyDocument, [x, z]: [f64; 2], low: f64) -> f64 {
+    let mut h = low;
+    if let Some(profile) = &d.mountain_envelope {
+        for body in &profile.bodies {
+            for pair in body.spine.windows(2) {
+                let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
+                    continue;
+                };
+                let (distance, t) = segment([x, z], [a[0], a[1]], [b[0], b[1]]);
+                let crest = a[2] * (1. - t) + b[2] * t;
+                let radius = distance / (a[3] * (1. - t) + b[3] * t);
+                if radius < 1. {
+                    h = h.max(
+                        low + (crest - low).max(0.)
+                            * envelope_weight(
+                                radius,
+                                body.lower_slope_power,
+                                body.crest_rounding_radius,
+                            ),
+                    );
+                }
+            }
+        }
+    }
+    h
+}
+
 fn mountain_envelope(
     d: &GrandGeographyDocument,
     point: [f64; 2],
@@ -824,7 +922,13 @@ fn lake_shore(d: &GrandGeographyDocument, [x, z]: [f64; 2], h: f64) -> f64 {
     let route_weight = smooth((frozen_distance - d.frozen_route.width * 0.5 - 5.) / 15.);
     let landing = ellipse([x, z], d.frozen_landing.center, d.frozen_landing.radii);
     let weight = route_weight * smooth((landing - 1.) / 0.5);
-    h * (1. - weight) + shore * weight
+    let blended = h * (1. - weight) + shore * weight;
+    // The landing was already graded before the shore. Its exclusion may
+    // retain that exact platform, but must not blend the shore back beneath
+    // its water datum when the surrounding natural mountain changes. Bound
+    // the complete transition by the lower of its shore and landing profiles;
+    // the ordinary forest tread is graded to its exact datum afterwards.
+    blended.max(shore.min(d.frozen_landing.height))
 }
 
 fn lake_bank(
@@ -982,6 +1086,56 @@ mod profile_tests {
             "../../../../../assets/config/v4/grand-v4/geography-r02.json"
         ))
         .expect("canonical geography")
+    }
+
+    #[test]
+    fn basin_backing_is_compact_sea_continuous_and_order_independent() {
+        let d = document();
+        let mut old = d.clone();
+        old.basin_backing = None;
+        assert!(super::super::GrandGeography::new(old.clone()).is_ok());
+        let mut reversed = d.clone();
+        let profile = reversed.basin_backing.as_mut().expect("backing");
+        profile.bodies.reverse();
+        for body in &mut profile.bodies {
+            body.spine.reverse();
+        }
+        for point in [[-360., 405.], [0., 360.], [235., 270.], [210., 85.]] {
+            for base in [-10., 0., 0.00001, 1., 24., 45., 120.] {
+                let height = basin_backing(&d, point, base);
+                assert!((height - basin_backing(&reversed, point, base)).abs() < 1e-9);
+                assert!((basin_backing(&old, point, base) - base).abs() < 1e-9);
+                assert!(height >= base);
+                if base <= 0. {
+                    assert!((height - base).abs() < 1e-9);
+                }
+                if base.abs() < 0.0001 {
+                    assert!((height - base).abs() < 1e-9, "sea join is not tangent");
+                }
+            }
+        }
+        for point in [[-1200., -900.], [1000., 0.], [225., -250.]] {
+            assert!((basin_backing(&d, point, 30.) - 30.).abs() < 1e-9);
+        }
+        let mut invalid = d.clone();
+        invalid
+            .basin_backing
+            .as_mut()
+            .expect("backing")
+            .sea_blend_height = f64::NAN;
+        assert!(super::super::GrandGeography::new(invalid).is_err());
+        let mut invalid = d;
+        invalid
+            .basin_backing
+            .as_mut()
+            .expect("backing")
+            .bodies
+            .first_mut()
+            .expect("body")
+            .spine
+            .first_mut()
+            .expect("node")[3] = 30.;
+        assert!(super::super::GrandGeography::new(invalid).is_err());
     }
 
     #[test]
@@ -1748,6 +1902,8 @@ mod profile_tests {
         // old peak coordinates; test the branch that owns this contract.
         let mut document = document();
         document.mountain_envelope = None;
+        document.landform_coast = false;
+        document.basin_backing = None;
         let bytes = serde_json::to_vec(&document).expect("legacy geography");
         let g = super::super::GrandCompiler::with_geography(
             super::super::tests::compiler(false).source.clone(),

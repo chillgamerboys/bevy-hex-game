@@ -107,6 +107,13 @@ pub struct GrandCompiler {
     objects: BTreeMap<ChunkId, Vec<ObjectInstance>>,
     influences: BTreeMap<ChunkId, Vec<ObjectInfluence>>,
 }
+fn mainland_area_tolerance(geography: &GrandGeography, target: usize) -> usize {
+    match &geography.document {
+        Some(document) if document.landform_coast => target / 50,
+        Some(_) => target / 10_000,
+        None => 0,
+    }
+}
 fn index(p: WorldHex) -> Option<usize> {
     let q = usize::try_from(p.q + OFFSET).ok()?;
     let r = usize::try_from(p.r + OFFSET).ok()?;
@@ -271,15 +278,11 @@ impl GrandCompiler {
             }
         }
         let mainland_target = source.canonical_mainland_columns * 7;
-        // The brief asks for approximately sevenfold area. Keep a tight 0.01%
-        // coastal allowance so an actual open river mouth need not be dammed
-        // or the whole world rescaled merely to recover a few boundary cells.
-        // Retained explicit-row worlds keep their existing exact contract.
-        let mainland_tolerance_columns = if geography.document.is_some() {
-            mainland_target / 10_000
-        } else {
-            0
-        };
+        // The design brief asks for approximately sevenfold mainland area.
+        // The integration owner explicitly approved this fixed 2% authoring
+        // envelope (6.86–7.14 times V3) before the common-landform coast study.
+        // Legacy explicit-row worlds retain their exact contract.
+        let mainland_tolerance_columns = mainland_area_tolerance(&geography, mainland_target);
         if count.abs_diff(mainland_target) > mainland_tolerance_columns {
             return Err(ContractError::new(
                 "grand",
