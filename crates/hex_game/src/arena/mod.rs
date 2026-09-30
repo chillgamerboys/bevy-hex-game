@@ -242,6 +242,7 @@ struct ViewState {
     previous_frame_at: Option<std::time::Instant>,
     frame_wall_intervals: Vec<f64>,
     capture_ready_elapsed_ms: Option<f64>,
+    capture_surface_sample: Option<hex_map::arena::streamed::GrandSurfaceSampleSnapshot>,
     step_offset: f32,
     tick_times: Vec<(u64, bool, f64)>,
     capture_inputs: Vec<(u32, ActorIntent)>,
@@ -313,6 +314,7 @@ impl Default for ViewState {
             previous_frame_at: None,
             frame_wall_intervals: Vec::new(),
             capture_ready_elapsed_ms: None,
+            capture_surface_sample: None,
             step_offset: 0.0,
             tick_times: Vec::new(),
             capture_inputs: Vec::new(),
@@ -648,7 +650,12 @@ pub fn run() -> AppExit {
                 .chain()
                 .in_set(ArenaFrame::Present),
         )
-        .add_systems(Update, capture_frame.in_set(ArenaFrame::Capture));
+        .add_systems(
+            Update,
+            (snapshot_surface_sample_capture, capture_frame)
+                .chain()
+                .in_set(ArenaFrame::Capture),
+        );
     app.run()
 }
 
@@ -1698,6 +1705,15 @@ fn camera_origin(
     session.camera_position(eye, desired)
 }
 
+fn snapshot_surface_sample_capture(world: &mut World) {
+    let state = world.resource::<ViewState>();
+    if state.capture.is_none() || state.requested {
+        return;
+    }
+    let snapshot = hex_map::arena::streamed::surface_sample_snapshot(world);
+    world.resource_mut::<ViewState>().capture_surface_sample = snapshot;
+}
+
 fn capture_frame(
     mut commands: Commands,
     mut state: ResMut<ViewState>,
@@ -2142,6 +2158,7 @@ fn capture_frame(
         ("expedition", serde_json::json!(session.expedition_progress())),
         ("package_identity", serde_json::json!(view.package_identity)),
         ("northern", northern::snapshot(northern_world.as_deref(), render.as_deref(), ocean_status.as_deref(), &ocean_frame, &ocean_profile)),
+        ("grand_surface_sample", serde_json::json!(state.capture_surface_sample)),
         ("water_lab", water_lab::snapshot(&lab_settings, &lab_frame, &wind_field)),
         ("expedition_fixture", serde_json::json!(expedition_capture::description(&state.capture_view))),
         ("readability_fixture", serde_json::json!(readability_capture::description(&state.capture_view))),

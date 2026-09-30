@@ -88,6 +88,63 @@ class GrandCaptureProvenanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "dressing mode"):
                     grand_capture.package_state(directory, plain=True)
 
+    def test_surface_sample_cannot_borrow_ordinary_capture_provenance(self):
+        mode = "crystal-four"
+        chunks = [{"q": 28, "r": -20}, {"q": 28, "r": -19},
+                  {"q": 29, "r": -20}, {"q": 29, "r": -19}]
+        identity = {"presentation_sample": mode}
+        receipt = {"diagnostic_presentation_sample": mode, "diagnostic_surface_chunks": chunks}
+        grand_capture.validate_presentation_sample(identity, receipt, mode)
+        for requested, stamped, compiled in (
+                (None, identity, receipt), (mode, {}, receipt), (mode, identity, {}),
+                (mode, identity, receipt | {"diagnostic_surface_chunks": chunks[:-1]}),
+                (mode, identity, receipt | {"diagnostic_surface_chunks": chunks[::-1]})):
+            with self.subTest(requested=requested, compiled=compiled):
+                with self.assertRaises(RuntimeError):
+                    grand_capture.validate_presentation_sample(stamped, compiled, requested)
+        grand_capture.validate_presentation_sample({}, {}, None)
+
+    def test_common_landform_area_uses_fixed_source_policy(self):
+        measurement = json.loads((grand_capture.ROOT / "assets/config/v4/grand-v4/measurement.json").read_text())
+        geography = json.loads((grand_capture.ROOT / "assets/config/v4/grand-v4/geography-r02.json").read_text())
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.package(directory, {})
+            receipt = json.loads((directory / "compile-receipt.json").read_text())
+        receipt.update(mainland_columns=657763, mainland_area_ratio=657763 / 93326,
+                       mainland_tolerance_columns=13065)
+        grand_capture.validate_area(receipt, measurement, geography | {"landform_coast": True})
+        for current in (geography | {"landform_coast": False},
+                        {k: v for k, v in geography.items() if k != "landform_coast"}):
+            with self.assertRaisesRegex(RuntimeError, "area contract"):
+                grand_capture.validate_area(receipt, measurement, current)
+        # The receipt cannot choose a wider allowance than the source policy.
+        with self.assertRaisesRegex(RuntimeError, "area contract"):
+            grand_capture.validate_area(receipt | {"mainland_tolerance_columns": 13066},
+                                        measurement, geography | {"landform_coast": True})
+
+    def test_surface_render_needs_actual_visible_retained_products(self):
+        chunks = [{"q": 28, "r": -20}, {"q": 28, "r": -19},
+                  {"q": 29, "r": -20}, {"q": 29, "r": -19}]
+        package = {"authoring_identity": {"presentation_sample": "crystal-four"},
+                   "compiler_receipt": {"package_fingerprint": 42, "source_fingerprint": 43,
+                                        "diagnostic_surface_chunks": chunks}}
+        snapshot = {"mode": "crystal-four", "package_fingerprint": 42, "source_fingerprint": 43,
+                    "selected_chunks": chunks, "source_chunks": 14, "converted_chunks": 4,
+                    "published_chunks": 4, "visible_chunks": 2, "vertices": 100, "triangles": 50,
+                    "packed_bytes": 4600, "packed_byte_limit": 16 * 1024 * 1024,
+                    "exact_edited_fallback": False}
+        grand_capture.validate_surface_snapshot(snapshot, package, "candidate")
+        grand_capture.validate_surface_snapshot(None, package, "baseline")
+        for invalid in (None, snapshot | {"visible_chunks": 0},
+                        snapshot | {"published_chunks": 3}, snapshot | {"packed_bytes": 4601},
+                        snapshot | {"source_fingerprint": 44},
+                        snapshot | {"exact_edited_fallback": True}):
+            with self.subTest(snapshot=invalid), self.assertRaises(RuntimeError):
+                grand_capture.validate_surface_snapshot(invalid, package, "candidate")
+        with self.assertRaises(RuntimeError):
+            grand_capture.validate_surface_snapshot(snapshot, package, "baseline")
+
     def test_current_signature_cannot_approve_unverified_prebuilt_compiler(self):
         for compiler_mode in (None, "prebuilt-unverified"):
             with self.subTest(mode=compiler_mode), tempfile.TemporaryDirectory() as temporary:

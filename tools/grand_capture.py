@@ -52,7 +52,20 @@ def cargo_arguments(profile: str, *, test_support: bool = False) -> tuple[str, .
     return ("run", "--profile", profile, "-p", "hex_game", "--features", features, "--", "--arena")
 
 
-def package_state(directory: Path, *, plain: bool = False) -> dict:
+def validate_presentation_sample(identity: dict, receipt: dict, sample: str | None) -> None:
+    if sample not in (None, "crystal-four"):
+        raise RuntimeError("Unsupported Grand presentation sample")
+    if (identity.get("presentation_sample") != sample
+            or receipt.get("diagnostic_presentation_sample") != sample):
+        raise RuntimeError("Package presentation sample differs from the explicit capture mode")
+    if sample is not None and receipt.get("diagnostic_surface_chunks") != [
+            {"q": 28, "r": -20}, {"q": 28, "r": -19},
+            {"q": 29, "r": -20}, {"q": 29, "r": -19}]:
+        raise RuntimeError("Package lacks the exact bounded Crystal presentation footprint")
+
+
+def package_state(directory: Path, *, plain: bool = False,
+                  presentation_sample: str | None = None) -> dict:
     if directory.is_symlink() or not directory.is_dir():
         raise RuntimeError("Package must be a real compiled directory")
     files = {}
@@ -65,12 +78,15 @@ def package_state(directory: Path, *, plain: bool = False) -> dict:
         if required not in files:
             raise RuntimeError(f"Grand package lacks {required}")
     identity = json.loads((directory / "authoring-identity.json").read_text())
-    expected_signature = grand_package.signature(ROOT / "assets/config/v4/grand-v4/world.ron") + ("-plain" if plain else "-dressed")
+    expected_signature = grand_package.package_signature(
+        ROOT / "assets/config/v4/grand-v4/world.ron", plain=plain,
+        presentation_sample=presentation_sample)
     if identity.get("plain") is not plain or identity.get("signature") != expected_signature:
         raise RuntimeError("Package authoring identity is stale or differs from requested dressing mode; compile current source to a fresh directory")
     if identity.get("compiler_mode") != "cargo-current-source":
         raise RuntimeError("Package lacks current-source compiler provenance; rebuild through Cargo before capture")
     receipt = json.loads((directory / "compile-receipt.json").read_text())
+    validate_presentation_sample(identity, receipt, presentation_sample)
     measurement = json.loads((ROOT / "assets/config/v4/grand-v4/measurement.json").read_text())
     geography = json.loads((ROOT / "assets/config/v4/grand-v4/geography-r02.json").read_text())
     validate_area(receipt, measurement, geography)
@@ -90,10 +106,13 @@ def validate_area(receipt: dict, measurement: dict, geography: dict) -> None:
     ratio = receipt.get("crystal_area_ratio")
     mainland = receipt.get("mainland_columns")
     mainland_ratio = receipt.get("mainland_area_ratio")
+    tolerance = (measurement["mainland_target_columns"] * 2 // 100
+                 if geography.get("landform_coast") is True
+                 else measurement["mainland_tolerance_columns"])
     expected = {
         "world_id": "grand-v4",
         "mainland_target_columns": measurement["mainland_target_columns"],
-        "mainland_tolerance_columns": measurement["mainland_tolerance_columns"],
+        "mainland_tolerance_columns": tolerance,
         "canonical_mainland_columns": measurement["canonical_mainland_columns"],
         "canonical_crystal_columns": canonical,
         "crystal_target_columns": measurement["crystal_target_columns"],
@@ -104,7 +123,7 @@ def validate_area(receipt: dict, measurement: dict, geography: dict) -> None:
     if (receipt.get("strict") is not True
             or any(receipt.get(key) != value for key, value in expected.items())
             or type(mainland) is not int
-            or abs(mainland - measurement["mainland_target_columns"]) > measurement["mainland_tolerance_columns"]
+            or abs(mainland - measurement["mainland_target_columns"]) > tolerance
             or type(mainland_ratio) not in (int, float) or not math.isfinite(mainland_ratio)
             or not math.isclose(mainland_ratio, mainland / measurement["canonical_mainland_columns"], rel_tol=1e-12)
             or type(ratio) not in (int, float) or not math.isfinite(ratio)
@@ -141,7 +160,36 @@ def complete_matrix(receipt: dict) -> None:
     update_coverage(receipt)
 
 
-def validate_native(path: Path, view: str, package: dict) -> dict:
+def validate_surface_snapshot(snapshot: dict | None, package: dict, sample_render: str) -> None:
+    """Require retained runtime products; an environment flag is not activation."""
+    sample = package["authoring_identity"].get("presentation_sample")
+    if sample is None or sample_render == "baseline":
+        if snapshot is not None:
+            raise RuntimeError("Unexpected diagnostic surface activation")
+        return
+    receipt = package["compiler_receipt"]
+    expected = receipt["diagnostic_surface_chunks"]
+    if (not isinstance(snapshot, dict) or snapshot.get("mode") != sample
+            or snapshot.get("package_fingerprint") != receipt["package_fingerprint"]
+            or snapshot.get("source_fingerprint") != receipt["source_fingerprint"]
+            or snapshot.get("selected_chunks") != expected
+            or snapshot.get("source_chunks") != 14
+            or snapshot.get("converted_chunks") != 4
+            or snapshot.get("published_chunks") != 4
+            or type(snapshot.get("visible_chunks")) is not int
+            or not 0 < snapshot["visible_chunks"] <= 4
+            or snapshot.get("exact_edited_fallback") is not False):
+        raise RuntimeError("Diagnostic surface was not visibly published from the expected source")
+    for key in ("vertices", "triangles", "packed_bytes"):
+        if type(snapshot.get(key)) is not int or snapshot[key] <= 0:
+            raise RuntimeError("Diagnostic surface lacks actual retained mesh counts")
+    if (snapshot.get("packed_byte_limit") != 16 * 1024 * 1024
+            or snapshot["packed_bytes"] > snapshot["packed_byte_limit"]
+            or snapshot["packed_bytes"] != snapshot["vertices"] * 40 + snapshot["triangles"] * 12):
+        raise RuntimeError("Diagnostic retained mesh budget differs from packed output")
+
+
+def validate_native(path: Path, view: str, package: dict, *, sample_render: str = "candidate") -> dict:
     state = json.loads(path.read_text())
     identity = state.get("package_identity") or {}
     if (state.get("view") != view or state.get("selection", {}).get("map") != "Grand V4"
@@ -153,8 +201,10 @@ def validate_native(path: Path, view: str, package: dict) -> dict:
         raise RuntimeError(f"{view}: render did not settle")
     if not state.get("camera", {}).get("position"):
         raise RuntimeError(f"{view}: missing camera")
+    snapshot = state.get("grand_surface_sample")
+    validate_surface_snapshot(snapshot, package, sample_render)
     return {"file": path.name, **file_record(path), "package_identity": identity,
-            "tick": state.get("tick"), "camera": state["camera"]}
+            "tick": state.get("tick"), "camera": state["camera"], "grand_surface_sample": snapshot}
 
 
 def capture(args: argparse.Namespace) -> int:
@@ -162,15 +212,22 @@ def capture(args: argparse.Namespace) -> int:
     if source["dirty"] and not args.dirty_diagnostic:
         raise RuntimeError("Commit the candidate first, or request --dirty-diagnostic scratch evidence")
     matrix = matrix_contract(args.view)
+    sample = args.presentation_sample
+    if args.sample_render == "baseline" and sample is None:
+        raise RuntimeError("A surface baseline requires the explicit matching diagnostic package")
+    if sample is not None and matrix["matrix_scope"] != "FOCUSED-DIAGNOSTIC":
+        raise RuntimeError("Presentation samples require an explicitly focused diagnostic capture")
     views = matrix["requested_views"]
     label = source["head"] + ("-dirty-" + source["state_sha256"][:12] if source["dirty"] else "")
     pack = ROOT / ".context/grand-review" / label / args.label
     if pack.exists():
         raise RuntimeError(f"Evidence exists already: {pack}")
-    package = package_state(args.package, plain=args.plain)
+    package = package_state(args.package, plain=args.plain, presentation_sample=sample)
     command = cargo_arguments(args.cargo_profile)
     env, removed = arena.environment(args.target_dir)
     env.update(HEX_GRAND_WORLD=str(args.package), HEX_ARENA_MAP="grand-v4")
+    if sample is not None and args.sample_render == "candidate":
+        env["HEX_GRAND_SURFACE_SAMPLE"] = "1"
     pack.mkdir(parents=True)
     (pack / "staged.patch").write_bytes(staged)
     (pack / "unstaged.patch").write_bytes(unstaged)
@@ -182,6 +239,10 @@ def capture(args: argparse.Namespace) -> int:
                "static_review": "UNREVIEWED", "human_motion": "HUMAN-MOTION-PENDING",
                "motion_route": MOTION_ROUTE, "mechanical_status": "INCOMPLETE",
                "inherited_capability_names_removed": removed, "frames": []}
+    if sample is not None:
+        receipt.update(content_stage="BOUNDED-SURFACE-DIAGNOSTIC", presentation_sample=sample,
+                       sample_render=args.sample_render,
+                       presentation_limitations=package["compiler_receipt"].get("diagnostic_presentation_limitations", []))
     print(f"Grand windowless evidence: {pack}", flush=True)
     try:
         hashes = set()
@@ -205,13 +266,15 @@ def capture(args: argparse.Namespace) -> int:
                 raise RuntimeError(f"{view}: capture failed; see {log}")
             row.update(arena.png_info(png))
             row["coverage"] = png_coverage(png, tuple(arena.CANVAS))
-            row["native_state"] = validate_native(png.with_suffix(".json"), view, package)
+            row["native_state"] = validate_native(png.with_suffix(".json"), view, package,
+                                                   sample_render=args.sample_render)
             if row["sha256"] in hashes:
                 raise RuntimeError(f"Duplicate frame at {view}")
             hashes.add(row["sha256"])
             row["mechanical_status"] = "CAPTURED"
             atomic_json(pack / "receipt.json", receipt)
-        if arena.source_state()[0] != source or package_state(args.package, plain=args.plain) != package:
+        if arena.source_state()[0] != source or package_state(
+                args.package, plain=args.plain, presentation_sample=sample) != package:
             raise RuntimeError("Source/package changed during capture")
         complete_matrix(receipt)
     except (Exception, KeyboardInterrupt) as error:
@@ -239,6 +302,10 @@ def main() -> int:
     parser.add_argument("--view", choices=VIEWS, action="append")
     parser.add_argument("--dirty-diagnostic", action="store_true")
     parser.add_argument("--plain", action="store_true", help="Explicitly admit a current plain-terrain package for geometry review")
+    parser.add_argument("--presentation-sample", choices=("crystal-four",),
+                        help="Explicit focused diagnostic for the matching bounded source surface")
+    parser.add_argument("--sample-render", choices=("baseline", "candidate"), default="candidate",
+                        help="Compare flag-off/flag-on rendering of the same immutable sample package")
     parser.add_argument("--cargo-profile", choices=("dev", "ci"), default="dev")
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--settle-frames", type=int, default=4)

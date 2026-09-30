@@ -46,6 +46,16 @@ def signature(source: Path) -> str:
     return digest.hexdigest()
 
 
+def package_signature(source: Path, *, plain: bool = False,
+                      presentation_sample: str | None = None) -> str:
+    if presentation_sample not in (None, "crystal-four"):
+        raise RuntimeError("Unsupported Grand presentation sample")
+    value = signature(source) + ("-plain" if plain else "-dressed")
+    if presentation_sample is not None:
+        value += "-presentation-sample-" + presentation_sample
+    return value
+
+
 def stage_plain_source(source: Path, directory: Path) -> Path:
     for companion in authoring_files(source)[1:]:
         shutil.copyfile(companion, directory / companion.name)
@@ -66,10 +76,12 @@ def main() -> int:
     parser.add_argument("--target-dir", type=Path, default=ROOT / "target/v4-authoring")
     parser.add_argument("--cargo-profile", choices=["dev", "ci"], default="dev")
     parser.add_argument("--plain", action="store_true", help="Full terrain, caves and water without object dressing")
+    parser.add_argument("--presentation-sample", choices=("crystal-four",),
+                        help="Explicit bounded terrain presentation diagnostic; not ordinary publication")
     parser.add_argument("--worldc", type=Path, help="Prebuilt compiler; output remains unverified")
     args = parser.parse_args()
     source = args.source.resolve()
-    sig = signature(source) + ("-plain" if args.plain else "-dressed")
+    sig = package_signature(source, plain=args.plain, presentation_sample=args.presentation_sample)
     if args.output.exists():
         stamp = args.output / "authoring-identity.json"
         required = ["manifest.ron", "grand-overview.ron", "arena-sites.ron", "grand-biomes.ron"]
@@ -86,14 +98,19 @@ def main() -> int:
                    ["cargo", "run", "--profile", args.cargo_profile, "-p", "hex_world_tool", "--bin", "worldc", "--"])
         env = dict(os.environ, CARGO_TARGET_DIR=str(args.target_dir.resolve()),
                    CARGO_INCREMENTAL="0", CARGO_BUILD_JOBS="2")
-        result = subprocess.call(command + ["grand-compile", "--source", str(source),
-                                            "--output", str(args.output.resolve())], cwd=ROOT, env=env)
+        compiler_args = ["grand-compile", "--source", str(source), "--output", str(args.output.resolve())]
+        if args.presentation_sample is not None:
+            compiler_args += ["--presentation-sample", args.presentation_sample]
+        result = subprocess.call(command + compiler_args, cwd=ROOT, env=env)
         if result:
             return result
-    (args.output / "authoring-identity.json").write_text(json.dumps({
+    identity = {
         "signature": sig, "plain": args.plain, "authoring_files": inputs,
         "compiler_mode": "prebuilt-unverified" if args.worldc else "cargo-current-source",
-        "cargo_profile": None if args.worldc else args.cargo_profile}, indent=2) + "\n")
+        "cargo_profile": None if args.worldc else args.cargo_profile}
+    if args.presentation_sample is not None:
+        identity["presentation_sample"] = args.presentation_sample
+    (args.output / "authoring-identity.json").write_text(json.dumps(identity, indent=2) + "\n")
     return 0
 
 
