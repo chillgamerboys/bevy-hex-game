@@ -127,3 +127,23 @@ fn fort_player_override_is_reset_owned_and_none_restores_the_world_recipe() {
     assert_eq!(BattlePreset::ALL.len(), 12);
     assert!(!BattlePreset::ORIGINAL.contains(&BattlePreset::Golem));
 }
+
+#[test]
+fn golem_walks_at_three_point_two_units_per_second() {
+    let (session, _, _, _, tuning) = fixture(ArenaEncounter::Dragon);
+    let mut golem = Actor::spawn(7, Vec3::new(0.0, SKIN, 0.0), Vec3::X);
+    golem.configure_species(Species::Golem, &tuning.encounters);
+    for _ in 0..120 {
+        motion::tick(
+            &mut golem,
+            Vec3::X,
+            false,
+            false,
+            false,
+            &session.collision,
+            &tuning.encounters,
+        );
+    }
+    assert!((golem.feet.x - 3.2).abs() < 0.01);
+    assert!(tuning.encounters.golem_speed < 3.5);
+}

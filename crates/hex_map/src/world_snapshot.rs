@@ -11,9 +11,9 @@ use std::fmt;
 use bevy::prelude::{Message, Resource, World};
 use hex_assets::{HexObjectRotation, ObjectAssetId, RuntimeArtCatalog, SubstanceTable};
 use hex_core::{
-    BiomeRegionId, BiomeRegions, DamagedVoxels, IlluminationLevel, InteriorRegionId,
+    BiomeRegionId, BiomeRegions, DamagedVoxels, HexCoord, IlluminationLevel, InteriorRegionId,
     InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, SpecialMovementRegion,
-    SpecialMovementRegions, TerrainVoxelHealth, TilePos, TraversalBlockers,
+    SpecialMovementRegions, TerrainVoxelHealth, TilePos, TraversalBlockers, MAX_HEADROOM,
 };
 use hex_multiplayer::{
     AuthoritySequence, BiomeRegionSnapshotV1, BoundError, BoundedText, BoundedVec,
@@ -21,9 +21,10 @@ use hex_multiplayer::{
     SpecialRegionSnapshotV1, WorldAnchorSnapshotV1, WorldColumnSnapshotV1, WorldDamageSnapshotV1,
     WorldDeltaOperationV1, WorldDeltaV1, WorldIlluminationV1, WorldLightSnapshotV1,
     WorldLiquidFlowV1, WorldLiquidSnapshotV1, WorldObjectSnapshotV1, WorldRunSnapshotV1,
-    WorldSnapshotV1, WorldSnapshotValidationError, WorldViewHintSnapshotV1, MAX_IDENTITY_BYTES,
-    MAX_OBJECT_BLOCKER_SURFACES, MAX_WORLD_DELTA_OPERATIONS, WORLD_DELTA_VERSION_V1,
-    WORLD_SNAPSHOT_VERSION_V1,
+    WorldSnapshotV1, WorldSnapshotValidationError, WorldViewHintSnapshotV1,
+    MAX_ABS_COMMAND_COORDINATE, MAX_ABS_COMMAND_LEVEL, MAX_IDENTITY_BYTES,
+    MAX_OBJECT_BLOCKER_SURFACES, MAX_WORLD_COLUMNS, MAX_WORLD_DELTA_OPERATIONS,
+    WORLD_DELTA_VERSION_V1, WORLD_SNAPSHOT_VERSION_V1,
 };
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -68,6 +69,14 @@ impl CurrentWorldSnapshotV1 {
 
     pub(crate) fn new(snapshot: WorldSnapshotV1) -> Self {
         Self(snapshot)
+    }
+
+    pub(crate) fn refresh_changed_coordinates(
+        &mut self,
+        source: WorldExportParts<'_>,
+        changed_coords: &BTreeSet<HexCoord>,
+    ) -> Result<(), WorldSnapshotError> {
+        refresh_snapshot_from_parts(&mut self.0, source, changed_coords)
     }
 }
 
@@ -424,35 +433,13 @@ pub(crate) fn export_from_parts(
     let mut columns = Vec::with_capacity(coordinates.len());
     let mut all_surfaces = Vec::new();
     for (coord, column) in coordinates {
-        let projected = runs(column);
-        if projected.is_empty() {
+        let Some(projected) =
+            export_column(coord, column, source.table, source.settings.level_height)?
+        else {
             continue;
-        }
-        let mut wire_runs = Vec::with_capacity(projected.len());
-        for run in projected {
-            let position = TilePos::new(coord, run.top.saturating_sub(1));
-            let name = source.table.name(run.substance).ok_or_else(|| {
-                WorldSnapshotError::UnknownSubstance(format!("{:?}", run.substance))
-            })?;
-            if run.substance.is_air() || name == "air" {
-                return Err(WorldSnapshotError::AirAsMaterial(name.to_owned()));
-            }
-            let (span_bottom_bits, span_top_bits) =
-                span_bits(run.bottom, run.top, source.settings.level_height);
-            wire_runs.push(WorldRunSnapshotV1 {
-                position,
-                run_bottom: run.bottom,
-                span_bottom_bits,
-                span_top_bits,
-                substance: bounded_text(name)?,
-                headroom: column.headroom_above(run.top).0,
-            });
-            all_surfaces.push(position);
-        }
-        columns.push(WorldColumnSnapshotV1 {
-            coord,
-            runs: BoundedVec::new(wire_runs)?,
-        });
+        };
+        all_surfaces.extend(projected.runs.iter().map(|run| run.position));
+        columns.push(projected);
     }
 
     let damage = source
@@ -562,6 +549,470 @@ pub(crate) fn export_from_parts(
     snapshot.validate()?;
     snapshot.public_fingerprint = fingerprint_world_snapshot_v1(&snapshot)?;
     Ok(snapshot)
+}
+
+fn export_column(
+    coord: HexCoord,
+    column: &Column,
+    table: &SubstanceTable,
+    level_height: f32,
+) -> Result<Option<WorldColumnSnapshotV1>, WorldSnapshotError> {
+    let projected = runs(column);
+    if projected.is_empty() {
+        return Ok(None);
+    }
+    let mut wire_runs = Vec::with_capacity(projected.len());
+    for run in projected {
+        let position = TilePos::new(coord, run.top.saturating_sub(1));
+        let name = table
+            .name(run.substance)
+            .ok_or_else(|| WorldSnapshotError::UnknownSubstance(format!("{:?}", run.substance)))?;
+        if run.substance.is_air() || name == "air" {
+            return Err(WorldSnapshotError::AirAsMaterial(name.to_owned()));
+        }
+        let (span_bottom_bits, span_top_bits) = span_bits(run.bottom, run.top, level_height);
+        wire_runs.push(WorldRunSnapshotV1 {
+            position,
+            run_bottom: run.bottom,
+            span_bottom_bits,
+            span_top_bits,
+            substance: bounded_text(name)?,
+            headroom: column.headroom_above(run.top).0,
+        });
+    }
+    Ok(Some(WorldColumnSnapshotV1 {
+        coord,
+        runs: BoundedVec::new(wire_runs)?,
+    }))
+}
+
+/// Reprojects only consequences owned by an accepted terrain-edit coordinate.
+///
+/// Terrain edits cannot mutate anchors, framing, authored liquids, or gameplay
+/// lights, and their conservative guards keep every light/liquid object intact.
+/// Keeping those bounded collections in place is both cheaper and stronger than
+/// recreating their stable identities. Surface features are the exception: grass
+/// and cave vegetation may retire when their support changes, so their object
+/// consequences are reconciled against the surviving private feature IDs.
+fn refresh_snapshot_from_parts(
+    snapshot: &mut WorldSnapshotV1,
+    source: WorldExportParts<'_>,
+    changed_coords: &BTreeSet<HexCoord>,
+) -> Result<(), WorldSnapshotError> {
+    if changed_coords.is_empty() {
+        return Err(WorldSnapshotError::PresentationMismatch(
+            "incremental snapshot refresh named no changed coordinates".to_owned(),
+        ));
+    }
+
+    let mut changed_columns = BTreeMap::new();
+    let mut changed_surfaces = Vec::new();
+    for coord in changed_coords {
+        let projected = source
+            .map
+            .column(*coord)
+            .map(|column| export_column(*coord, column, source.table, source.settings.level_height))
+            .transpose()?
+            .flatten();
+        if let Some(column) = &projected {
+            changed_surfaces.extend(column.runs.iter().map(|run| run.position));
+        }
+        changed_columns.insert(*coord, projected);
+    }
+
+    let mut damage = Vec::new();
+    for coord in changed_coords {
+        let Some(column) = source.map.column(*coord) else {
+            continue;
+        };
+        for level in 0..column.top() {
+            let position = TilePos::new(*coord, level);
+            let Some(health) = source.damage.get(position) else {
+                continue;
+            };
+            let substance = source.map.get(position);
+            if substance.is_air() || source.table.toughness(substance) != Some(health.maximum) {
+                return Err(WorldSnapshotError::DamageMismatch(position));
+            }
+            damage.push(WorldDamageSnapshotV1 {
+                position,
+                remaining: health.remaining,
+                maximum: health.maximum,
+            });
+        }
+    }
+
+    let interior_surfaces = changed_surfaces
+        .iter()
+        .filter_map(|position| {
+            source
+                .interiors
+                .get(*position)
+                .map(|region| InteriorSurfaceSnapshotV1 {
+                    position: *position,
+                    region: region.0,
+                })
+        })
+        .collect();
+    let special_regions = changed_surfaces
+        .iter()
+        .filter_map(|position| {
+            source
+                .special_regions
+                .get(*position)
+                .map(|region| SpecialRegionSnapshotV1 {
+                    position: *position,
+                    region: region.0,
+                })
+        })
+        .collect();
+    let biome_regions = source.biome_regions.map_or_else(Vec::new, |regions| {
+        changed_surfaces
+            .iter()
+            .filter_map(|position| {
+                regions.get(*position).map(|region| BiomeRegionSnapshotV1 {
+                    position: *position,
+                    region: region.0,
+                })
+            })
+            .collect()
+    });
+    let blockers = source.blockers.map_or_else(Vec::new, |blockers| {
+        changed_surfaces
+            .iter()
+            .copied()
+            .filter(|position| blockers.contains(*position))
+            .collect()
+    });
+
+    // Accepted edits only remove authored roof membership. Re-read the prior
+    // coordinate keys through the live resource so removal and region replacement
+    // remain exact without scanning every roof voxel in a cathedral-sized world.
+    let interior_roofs = snapshot
+        .interior_roofs
+        .iter()
+        .filter(|entry| changed_coords.contains(&entry.position.coord))
+        .filter_map(|entry| {
+            source
+                .interiors
+                .roof_region(entry.position)
+                .map(|region| InteriorRoofSnapshotV1 {
+                    position: entry.position,
+                    region: region.0,
+                })
+        })
+        .collect();
+
+    replace_changed_columns(&mut snapshot.columns, changed_columns)?;
+    replace_changed_positions(
+        "damage",
+        &mut snapshot.damage,
+        changed_coords,
+        damage,
+        |entry| entry.position,
+    )?;
+    replace_changed_positions(
+        "interior_surfaces",
+        &mut snapshot.interior_surfaces,
+        changed_coords,
+        interior_surfaces,
+        |entry| entry.position,
+    )?;
+    replace_changed_positions(
+        "interior_roofs",
+        &mut snapshot.interior_roofs,
+        changed_coords,
+        interior_roofs,
+        |entry| entry.position,
+    )?;
+    replace_changed_positions(
+        "special_regions",
+        &mut snapshot.special_regions,
+        changed_coords,
+        special_regions,
+        |entry| entry.position,
+    )?;
+    replace_changed_positions(
+        "biome_regions",
+        &mut snapshot.biome_regions,
+        changed_coords,
+        biome_regions,
+        |entry| entry.position,
+    )?;
+    replace_changed_positions(
+        "blockers",
+        &mut snapshot.blockers,
+        changed_coords,
+        blockers,
+        |position| *position,
+    )?;
+    reconcile_presentation_objects(
+        snapshot,
+        source.presentation,
+        source.map,
+        source.art_catalog,
+        changed_coords,
+    )?;
+
+    validate_incremental_snapshot_changes(snapshot, changed_coords)?;
+    snapshot.public_fingerprint = fingerprint_canonical_world_snapshot_v1(snapshot);
+    Ok(())
+}
+
+fn validate_incremental_snapshot_changes(
+    snapshot: &WorldSnapshotV1,
+    changed_coords: &BTreeSet<HexCoord>,
+) -> Result<(), WorldSnapshotError> {
+    if snapshot.columns.is_empty() {
+        return Err(WorldSnapshotValidationError::EmptyWorld.into());
+    }
+    for column in snapshot
+        .columns
+        .iter()
+        .filter(|column| changed_coords.contains(&column.coord))
+    {
+        let coordinate_probe = TilePos::new(column.coord, 0);
+        if column.coord.x().unsigned_abs() > MAX_ABS_COMMAND_COORDINATE
+            || column.coord.y().unsigned_abs() > MAX_ABS_COMMAND_COORDINATE
+            || column.coord.z().unsigned_abs() > MAX_ABS_COMMAND_COORDINATE
+        {
+            return Err(
+                WorldSnapshotValidationError::PositionOutsideDomain(coordinate_probe).into(),
+            );
+        }
+        for run in column.runs.iter() {
+            if run.position.coord != column.coord
+                || run.run_bottom < 0
+                || run.run_bottom > run.position.level
+                || run.position.level.unsigned_abs() > MAX_ABS_COMMAND_LEVEL
+                || !(0..=MAX_HEADROOM).contains(&run.headroom)
+            {
+                return Err(WorldSnapshotValidationError::InvalidRun(run.position).into());
+            }
+            let bottom = run.span_bottom();
+            let top = run.span_top();
+            if !bottom.is_finite() || !top.is_finite() || top <= bottom {
+                return Err(WorldSnapshotValidationError::InvalidSpan(run.position).into());
+            }
+        }
+    }
+    for entry in snapshot
+        .damage
+        .iter()
+        .filter(|entry| changed_coords.contains(&entry.position.coord))
+    {
+        if !snapshot.contains_voxel(entry.position) {
+            return Err(WorldSnapshotValidationError::DanglingVoxel(entry.position).into());
+        }
+    }
+    for position in snapshot
+        .anchors
+        .iter()
+        .map(|entry| entry.position)
+        .chain(
+            snapshot
+                .interior_surfaces
+                .iter()
+                .map(|entry| entry.position),
+        )
+        .chain(snapshot.special_regions.iter().map(|entry| entry.position))
+        .chain(snapshot.biome_regions.iter().map(|entry| entry.position))
+        .chain(snapshot.blockers.iter().copied())
+        .chain(snapshot.lights.iter().map(|entry| entry.origin))
+        .chain(snapshot.objects.iter().map(|entry| entry.root))
+        .filter(|position| changed_coords.contains(&position.coord))
+    {
+        if !snapshot.contains_surface(position) {
+            return Err(WorldSnapshotValidationError::DanglingSurface(position).into());
+        }
+    }
+    for position in snapshot
+        .interior_roofs
+        .iter()
+        .map(|entry| entry.position)
+        .chain(snapshot.liquids.iter().map(|entry| entry.position))
+        .filter(|position| changed_coords.contains(&position.coord))
+    {
+        if !snapshot.contains_voxel(position) {
+            return Err(WorldSnapshotValidationError::DanglingVoxel(position).into());
+        }
+    }
+    for position in snapshot
+        .objects
+        .iter()
+        .flat_map(|entry| entry.blockers.iter().copied())
+        .filter(|position| changed_coords.contains(&position.coord))
+    {
+        if !snapshot.contains_surface(position) {
+            return Err(WorldSnapshotValidationError::DanglingSurface(position).into());
+        }
+    }
+    Ok(())
+}
+
+fn replace_changed_columns(
+    columns: &mut BoundedVec<WorldColumnSnapshotV1, MAX_WORLD_COLUMNS>,
+    replacements: BTreeMap<HexCoord, Option<WorldColumnSnapshotV1>>,
+) -> Result<(), WorldSnapshotError> {
+    let mut values = std::mem::take(columns).into_vec();
+    for (coord, replacement) in replacements {
+        match values.binary_search_by_key(&coord, |column| column.coord) {
+            Ok(index) => match replacement {
+                Some(replacement) => {
+                    if let Some(column) = values.get_mut(index) {
+                        *column = replacement;
+                    }
+                }
+                None => {
+                    values.remove(index);
+                }
+            },
+            Err(index) => {
+                if let Some(replacement) = replacement {
+                    values.insert(index, replacement);
+                }
+            }
+        }
+    }
+    *columns = bounded_collection("columns", values)?;
+    Ok(())
+}
+
+fn replace_changed_positions<T, const MAX: usize>(
+    collection: &'static str,
+    bounded: &mut BoundedVec<T, MAX>,
+    changed_coords: &BTreeSet<HexCoord>,
+    replacements: Vec<T>,
+    position: impl Fn(&T) -> TilePos + Copy,
+) -> Result<(), WorldSnapshotError> {
+    let mut values = std::mem::take(bounded).into_vec();
+    values.retain(|entry| !changed_coords.contains(&position(entry).coord));
+    values.extend(replacements);
+    values.sort_by_key(position);
+    *bounded = bounded_collection(collection, values)?;
+    Ok(())
+}
+
+fn reconcile_presentation_objects(
+    snapshot: &mut WorldSnapshotV1,
+    presentation: Option<&MapPresentationProjection>,
+    map: &VoxelMap,
+    catalog: Option<&RuntimeArtCatalog>,
+    changed_coords: &BTreeSet<HexCoord>,
+) -> Result<(), WorldSnapshotError> {
+    let Some(presentation) = presentation else {
+        if !snapshot.lights.is_empty()
+            || !snapshot.liquids.is_empty()
+            || !snapshot.objects.is_empty()
+        {
+            return Err(WorldSnapshotError::WorldUnavailable(
+                "MapPresentationProjection",
+            ));
+        }
+        return Ok(());
+    };
+    let live_features = presentation
+        .features()
+        .keys()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let live_presented_lights = presentation
+        .lights()
+        .iter()
+        .filter_map(|(id, light)| light.presentation.map(|_| *id))
+        .collect::<BTreeSet<_>>();
+    let mut seen_features = BTreeSet::new();
+    let mut seen_lights = BTreeSet::new();
+    for object in snapshot.objects.iter() {
+        let identity = object.stable_id.as_str();
+        if identity.starts_with(FEATURE_ID_PREFIX) {
+            seen_features.insert(FeatureId(parse_local_id(identity, FEATURE_ID_PREFIX)?));
+        } else {
+            seen_lights.insert(LightId(parse_local_id(identity, LIGHT_ID_PREFIX)?));
+        }
+    }
+    if live_features.iter().any(|id| !seen_features.contains(id)) {
+        return Err(WorldSnapshotError::PresentationMismatch(
+            "live feature projection has no current snapshot object".to_owned(),
+        ));
+    }
+    if live_presented_lights
+        .iter()
+        .any(|id| !seen_lights.contains(id))
+    {
+        return Err(WorldSnapshotError::PresentationMismatch(
+            "live presented light has no current snapshot object".to_owned(),
+        ));
+    }
+
+    let mut objects = std::mem::take(&mut snapshot.objects).into_vec();
+    objects.retain(|object| {
+        let identity = object.stable_id.as_str();
+        identity
+            .strip_prefix(FEATURE_ID_PREFIX)
+            .and_then(|suffix| suffix.parse::<u32>().ok())
+            .is_none_or(|id| live_features.contains(&FeatureId(id)))
+    });
+
+    for (id, light) in presentation.lights() {
+        let Some(light_presentation) = light.presentation else {
+            continue;
+        };
+        let PlannedLightPresentation::CrystalAscent(CrystalAscentCrystalPresentation {
+            kind: CrystalAscentCrystalKind::Heart,
+            rotation: rotation_steps,
+        }) = light_presentation
+        else {
+            continue;
+        };
+        let catalog = catalog.ok_or(WorldSnapshotError::WorldUnavailable("RuntimeArtCatalog"))?;
+        let object_set = CrystalAscentObjectSet::resolve(catalog)
+            .map_err(|error| WorldSnapshotError::UnknownObject(error.to_string()))?;
+        let rotation = HexObjectRotation::new(rotation_steps)
+            .map_err(|error| WorldSnapshotError::PresentationMismatch(error.to_string()))?;
+        let visual_level = light.origin.level.checked_add(1).ok_or_else(|| {
+            WorldSnapshotError::PresentationMismatch(
+                "crystal heart visual origin overflowed".to_owned(),
+            )
+        })?;
+        let visual_origin = TilePos::new(light.origin.coord, visual_level);
+        let heart_runs = object_set
+            .project_heart_runs(visual_origin, rotation)
+            .ok_or_else(|| {
+                WorldSnapshotError::PresentationMismatch(
+                    "crystal heart occupied-volume projection overflowed".to_owned(),
+                )
+            })?;
+        let heart_coords = heart_runs
+            .iter()
+            .map(|run| run.top.coord)
+            .collect::<BTreeSet<_>>();
+        if heart_coords.is_disjoint(changed_coords) {
+            continue;
+        }
+        let supports = heart_coords
+            .iter()
+            .filter_map(|coord| map.column(*coord).map(|column| (*coord, column)))
+            .flat_map(|(coord, column)| {
+                runs(column)
+                    .into_iter()
+                    .map(move |run| TilePos::new(coord, run.top.saturating_sub(1)))
+            })
+            .collect::<Vec<_>>();
+        let (asset, rotation, blockers) =
+            crystal_object_consequence(light_presentation, light.origin, &supports, catalog)?;
+        let replacement = WorldObjectSnapshotV1 {
+            stable_id: bounded_text(stable_local_id(LIGHT_ID_PREFIX, id.0))?,
+            asset_identity: bounded_text(asset.as_str())?,
+            root: light.origin,
+            rotation_sixths: rotation.steps(),
+            blockers: BoundedVec::<_, MAX_OBJECT_BLOCKER_SURFACES>::new(blockers)?,
+            protects_edits: true,
+        };
+        upsert(&mut objects, replacement, |object| object.stable_id.clone());
+    }
+    snapshot.objects = bounded_collection("objects", objects)?;
+    Ok(())
 }
 
 fn export_presentation(
@@ -1180,6 +1631,10 @@ pub fn fingerprint_world_snapshot_v1(
     snapshot: &WorldSnapshotV1,
 ) -> Result<PublicWorldFingerprint, WorldSnapshotError> {
     snapshot.validate()?;
+    Ok(fingerprint_canonical_world_snapshot_v1(snapshot))
+}
+
+fn fingerprint_canonical_world_snapshot_v1(snapshot: &WorldSnapshotV1) -> PublicWorldFingerprint {
     let mut encoder = CanonicalEncoder::default();
     encoder.bytes(FINGERPRINT_DOMAIN);
     encoder.u16(snapshot.version);
@@ -1206,7 +1661,7 @@ pub fn fingerprint_world_snapshot_v1(
     encode_lights(&mut encoder, snapshot.lights.as_slice());
     encode_liquids(&mut encoder, snapshot.liquids.as_slice());
     encode_objects(&mut encoder, snapshot.objects.as_slice());
-    Ok(PublicWorldFingerprint(xxh3_64(&encoder.bytes)))
+    PublicWorldFingerprint(xxh3_64(&encoder.bytes))
 }
 
 fn verify_fingerprint(snapshot: &WorldSnapshotV1) -> Result<(), WorldSnapshotError> {

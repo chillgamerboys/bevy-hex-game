@@ -1,0 +1,19 @@
+{
+  "scope": "Canonical Grand V3 measurement and production area targets; not current terrain geometry",
+  "canonical_source": "assets/config/schematics/grand-v3-template.ron",
+  "canonical_sha256": "0abdb6a13b54cc84eddc5fbac72d91aaa1a29418f7202d83d9802b8d1ea876fe",
+  "fine_radius": 187,
+  "coarse_pitch": 22,
+  "full_disk_columns": 105469,
+  "canonical_mainland_columns": 93326,
+  "other_included_component_columns": [],
+  "mainland_target_columns": 653282,
+  "mainland_tolerance_columns": 65,
+  "mainland_tolerance_basis": "0.01% of nominal sevenfold area for small authored coastal openings; actual area is reported separately",
+  "target_area_ratio": 7,
+  "canonical_crystal_radius": 32,
+  "canonical_crystal_columns": 3169,
+  "crystal_target_columns": 22183,
+  "hex_column_area": 2.598076211353316,
+  "production_geometry": "geography-r02.json; actual area is recorded in each immutable package's compile-receipt.json"
+}

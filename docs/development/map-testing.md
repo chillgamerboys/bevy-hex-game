@@ -64,8 +64,55 @@ python3 tools/test_scope.py check-partitions map
 ```
 
 It lists the exact package and targets through nextest, rejects overlap or omission,
-and confirms ignored stress tests remain discoverable. CI publishes separate JUnit,
+and confirms every named release/stress/benchmark identity remains discoverable and
+ignored. Ordinary test totals are deliberately not frozen: adding a test is valid when
+the three disjoint identity sets still union to the full ordinary set. CI runs this
+completeness preflight before executing the partitions, then publishes separate JUnit,
 timing JSON, and logs for all three ordinary concerns.
+
+### Explicit compiled-package arena gates
+
+The map ignored-test inventory also retains these four `hex_map` library gates,
+which belong to the `map-unit` target partition. Registration does not promote
+them into ordinary CI or make ordinary selection depend on a local package.
+
+| Exact Rust test identity | Explicit package prerequisite |
+|---|---|
+| `arena::streamed::tests::actual_northern_menu_selection_commits_before_same_frame_reset` | `HEX_NORTHERN_WORLD`, current full-scale Northern package |
+| `arena::streamed::tests::actual_northern_three_circuits_carve_restart_and_map_switch` | `HEX_NORTHERN_WORLD`, current full-scale Northern package; explicit CPU/residency benchmark |
+| `arena::streamed::render::tests::northern_actual_tree_is_never_visible_from_only_crown_chunks` | `HEX_NORTHERN_WORLD`, current full-scale Northern package |
+| `arena::real_world_tests::finite_expedition_blast_carves_objects_bedrock_and_preserves_water_then_resets` | `HEX_FOREST_WORLD`, current compiled Forest expedition package |
+
+Run an individual gate with its absolute package directory and exact identity:
+
+```sh
+HEX_NORTHERN_WORLD=/absolute/path/to/compiled-northern \
+cargo test --package hex_map --features arena-prototype --lib \
+  arena::streamed::tests::actual_northern_menu_selection_commits_before_same_frame_reset \
+  -- --ignored --exact
+```
+
+Record the source commit, package fingerprint and execution profile with the
+result. Use the appropriate benchmark profile when collecting performance
+evidence. The existing
+`arena::forest::tests::authored_forest_publication_and_v4_edit_roundtrip` requires
+the **legacy** package built by `tools/forest_world.py compile`; it must not be
+bundled with the current Forest expedition gate under one package assumption.
+Missing package input is an unmet explicit gate, not a skipped success. The
+ordinary completeness check only lists these identities and requires no package.
+
+Every canonical Rust test run first lists the exact selected identities. A zero-test
+selection fails before execution, even if the underlying runner would otherwise return
+success. Cargo's libtest followups also sum every final passed/failed result, so selecting
+only ignored tests cannot produce a green zero-execution run. Timing JSON retains the exact
+execution and selection commands, selected and executed counts, identity-set fingerprint,
+and separate selection/execution durations so a green result can be traced to what it
+actually ran and where it spent time. Listings capture only their identity stream on
+stdout; Cargo compilation diagnostics remain live on stderr during a cold preflight.
+The built-in Python selector suite receives the same zero-test protection by checking
+its reported run count. That canonical Python concern also runs the fail-closed
+structural-review launcher contracts, so review-tool and compatibility-wrapper
+changes cannot bypass their mocked provenance, freshness, and failure tests.
 
 ## Evidence boundaries
 
@@ -85,5 +132,55 @@ timing JSON, and logs for all three ordinary concerns.
   voxel occupancy; publication tests assert the integer contract directly.
 - Fixed-frame tests remain fixed when frame count is the invariant. Bounded settling
   is used only when convergence, rather than an exact frame, is the contract.
-- Forest, Waterfall, map-review captures, and their acceptance criteria remain owned
-  by the existing visual workflow and are not redefined by this partition.
+- Forest, Waterfall, Arid, map-review captures, and their acceptance criteria remain
+  owned by the existing visual workflow and are not redefined by this partition.
+  Arid review must show all three Desert Transition bands, Desert Plain's open
+  relief, both a dune crest and trough, and the oasis with both surrounding rings;
+  typed map tests, not those frames, prove exact material coverage, one-level dune
+  traversal, local-water isolation, date-palm blockers, seam redundancy, and
+  reachability.
+- Island review must show all five Sandy Islets and the playable primary route, the
+  Wooded Island beach/interior/ridge progression, and Ocean Archipelagoes' open sea,
+  three satellite clusters, landing, wooded heart, and only dry seam. Typed tests,
+  not those frames, prove level-8 water continuity, exact component counts, two-column
+  sand fringes, tree exclusions, ordinary reachability, scenic disconnection, and
+  teardown/re-entry. No capture may be used as evidence that water is impassable.
+
+## Visual-pack close-out
+
+A successful visual-walk process proves that the route, renderer, and structural capture
+oracles completed. It does **not** mean that somebody inspected the resulting pixels. At walk
+startup, `review-index.md` is atomically replaced with an **INCOMPLETE — NOT REVIEWABLE**
+marker. This invalidates any checked index left by an earlier run; if the process aborts, the
+directory remains explicitly non-reviewable even when old PNGs are still present.
+
+Only when the persisted capture count exactly matches the script's expected count does the
+walk atomically replace that marker with a completed index. It records the run ID, script path,
+planned and launched scenarios (including resolved seeds), and capture count, then embeds every
+frame in script order. Every frame begins as `UNREVIEWED`; a reviewer must replace that result
+with explicit `PASS` or `FAIL` and fill in its notes before curating a smaller hero set or calling
+the candidate review-ready. Looking only at the images selected for a summary is not a review of
+the pack.
+
+Corrective packs require a second, fresh-eyes evidence pass after the primary full-resolution
+inspection. Scan a contact sheet containing the complete capture set to expose inconsistent
+framing or systematic artifacts, then challenge each PASS note against the pixels it actually
+shows. Repeated generic notes are not acceptable when a frame is occluded, dominated by a
+near-camera prop, or does not visibly support that criterion. Recapture such a frame or mark it
+FAIL; capture-count completeness never upgrades weak evidence.
+
+Authored and composed maps add two required stress checks:
+
+- Inspect a character-height view across every landmark/biome seam and entrance apron, with
+  enough exterior sky in frame for a missing foundation, skirt, or cutaway-owned run to be
+  obvious. Crystal Mountain specifically includes the lower-entry apron and the complete base
+  of Crystal Ascent in this check. Its authored stair annulus must also prove exact continuous
+  occupancy from level 0 through the chamber datum; validating only the elevated treads is not
+  sufficient foundation evidence.
+- Orbit the native camera past repeated emissive, translucent, or animated props. Static frames
+  cannot clear flicker or temporal visibility changes; the motion check remains a named-human
+  gate even when every still is clean.
+
+When visual review finds a defect, fix the renderer or authored geometry, add the narrowest typed
+root-cause invariant available, and recapture the affected route. Old frames are not evidence for
+the corrected candidate.

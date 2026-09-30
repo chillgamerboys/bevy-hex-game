@@ -88,8 +88,9 @@ pub use object_blueprint::{
     MAX_OBJECT_HEIGHT, MAX_OBJECT_RADIUS, MAX_OBJECT_VOXELS, OBJECT_BLUEPRINT_SCHEMA_VERSION,
 };
 pub use object_catalog::{
-    HexObjectRotation, ObjectCatalogError, ObjectCatalogFile, ObjectInstance, ObjectInstanceError,
-    ResolvedVoxelStyle, RuntimeArtCatalog, RuntimeArtCatalogStatus, OBJECT_CATALOG_SCHEMA_VERSION,
+    HexObjectRotation, ObjectCarveMask, ObjectCatalogError, ObjectCatalogFile, ObjectInstance,
+    ObjectInstanceError, ResolvedVoxelStyle, RuntimeArtCatalog, RuntimeArtCatalogStatus,
+    OBJECT_CATALOG_SCHEMA_VERSION,
 };
 pub use perception::{PerceptionSettings, SightBandSettings, SightPreset, SightRanges};
 pub use sandbox::{

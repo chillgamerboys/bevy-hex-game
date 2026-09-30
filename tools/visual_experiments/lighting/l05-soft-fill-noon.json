@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "candidate_id": "l05-soft-fill-noon",
+  "base": "default-cycle",
+  "noon_overrides": {
+    "direct_illuminance": 9000.0,
+    "ambient_brightness": 115.0,
+    "ambient_color": [0.94, 0.97, 1.0],
+    "sky_light_intensity": 85.0,
+    "ground_color": [0.34, 0.30, 0.25]
+  }
+}

@@ -6,6 +6,11 @@ fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
     enter_gameplay(&mut app);
 
     assert!(app.world().contains_resource::<TerrainReady>());
+    let current = app
+        .world()
+        .get_resource::<hex_map::CurrentWorldSnapshotV1>()
+        .expect("readiness must follow canonical snapshot publication");
+    assert_eq!(current.snapshot().columns.len(), 469);
     let report = app.world().resource::<GenerationReport>();
     assert_eq!(report.seed, 20_260_726);
     assert_eq!(report.candidates_evaluated, 8);
@@ -875,6 +880,30 @@ fn v3_waterfall_spawns_caps_and_a_non_shadowing_fall_curtain() {
     let mut app = v3_waterfall_app();
     enter_gameplay(&mut app);
 
+    let (liquid_surfaces, resident_chunks) = {
+        let world = app.world();
+        let table = world.resource::<SubstanceTable>();
+        let water = table
+            .id("water")
+            .expect("the accepted table should contain water");
+        let map = world.resource::<VoxelMap>();
+        let liquid_surfaces = map
+            .columns()
+            .map(|(_coord, column)| {
+                hex_map::runs(column)
+                    .into_iter()
+                    .filter(|run| run.substance == water && column.get(run.top).is_air())
+                    .count()
+            })
+            .sum::<usize>();
+        let resident_chunks = map
+            .columns()
+            .map(|(coord, _column)| hex_map::terrain_chunk_key(coord))
+            .collect::<BTreeSet<_>>()
+            .len();
+        (liquid_surfaces, resident_chunks)
+    };
+
     let world = app.world_mut();
     let mut query = world.query::<(
         &Name,
@@ -898,7 +927,18 @@ fn v3_waterfall_spawns_caps_and_a_non_shadowing_fall_curtain() {
             _ => unreachable!(),
         }
     }
-    assert!(caps > 30, "every Waterfall liquid run should receive a cap");
+    assert!(
+        caps > 0,
+        "Waterfall liquid surfaces should publish cap batches"
+    );
+    assert!(
+        caps <= resident_chunks.saturating_mul(3),
+        "water caps must be bounded by resident chunk and non-fall material style"
+    );
+    assert!(
+        caps < liquid_surfaces,
+        "the fixture should prove caps are no longer one entity per exposed liquid run"
+    );
     assert_eq!(
         curtains, 1,
         "the three adjacent fall lanes share one water curtain mesh"
@@ -957,7 +997,22 @@ fn v3_volcano_materializes_and_reenters_with_exact_lava_and_report_state() {
         })
         .count();
     let first_curtains = first_presentations.len().saturating_sub(first_caps);
-    assert!(first_caps >= metrics.lava_nodes as usize);
+    let resident_chunks = app
+        .world()
+        .resource::<VoxelMap>()
+        .columns()
+        .map(|(coord, _column)| hex_map::terrain_chunk_key(coord))
+        .collect::<BTreeSet<_>>()
+        .len();
+    assert!(first_caps > 0, "lava surfaces should publish cap batches");
+    assert!(
+        first_caps <= resident_chunks.saturating_mul(6),
+        "cap entities must be bounded by chunk, role, and non-fall style"
+    );
+    assert!(
+        first_caps < metrics.lava_nodes as usize,
+        "the fixture should prove caps are no longer one entity per liquid node"
+    );
     assert_eq!(
         first_curtains, 1,
         "all adjacent lava falls should share one curtain mesh"

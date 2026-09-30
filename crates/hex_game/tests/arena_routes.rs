@@ -19,7 +19,7 @@ use hex_core::{
 };
 
 type Waypoint = (i32, i32, i32);
-type LocalRoute = (u8, Species, u16, i32, i32);
+type LocalRoute = (hex_arena::ActorId, Species, u16, i32, i32);
 
 // Accepted seeds: Fort 640367719 and Seven Regions 703700113. These explicit
 // cell centers were discovered once and replayed in both directions. The tests
@@ -160,8 +160,10 @@ fn move_to(app: &mut App, waypoint: Vec3, name: &str, segment: usize, ticks: &mu
         {
             return;
         }
-        assert!(feet.y>=initial.y.min(waypoint.y)-0.45,
-            "{name} segment {segment} fell below the authored step: {initial:?} -> {waypoint:?}, feet {feet:?}");
+        assert!(
+            feet.y >= initial.y.min(waypoint.y) - 0.45,
+            "{name} segment {segment} fell below the authored step: {initial:?} -> {waypoint:?}, feet {feet:?}"
+        );
         *ticks += 1;
         assert!(
             *ticks <= 3_600,
@@ -258,7 +260,7 @@ fn seven_regions_human_reaches_cave_entrance_and_returns_dry() {
     );
 }
 
-fn assert_local_roundtrip(app: &App, id: u8, offset: HexCoord) {
+fn assert_local_roundtrip(app: &App, id: hex_arena::ActorId, offset: HexCoord) {
     let session = app.world().resource::<ArenaSession>();
     let actor = session
         .actors
@@ -274,8 +276,18 @@ fn assert_local_roundtrip(app: &App, id: u8, offset: HexCoord) {
     assert!(session.actor_pose_valid(id, view, geometry));
     let destination = actor.feet + offset.to_world(0.0);
     assert!(destination.distance(actor.feet) > 2.5);
-    assert!(session.probe_dry_route(id,&[destination,actor.feet],view,geometry,app.world().resource::<ArenaTuning>()),
-        "{:?} {id} cannot make the frozen local ground excursion {:?} -> {destination:?} and return",actor.species,actor.feet);
+    assert!(
+        session.probe_dry_route(
+            id,
+            &[destination, actor.feet],
+            view,
+            geometry,
+            app.world().resource::<ArenaTuning>()
+        ),
+        "{:?} {id} cannot make the frozen local ground excursion {:?} -> {destination:?} and return",
+        actor.species,
+        actor.feet
+    );
 }
 
 fn assert_local_routes(app: &App, routes: &[LocalRoute]) {
@@ -381,12 +393,11 @@ fn physical_damage_lowers_a_traversed_fort_surface_and_the_human_still_returns()
     let pos = TilePos::new(HexCoord::from_axial(8, -3), 15);
     let view = fixture.world().resource::<ArenaTerrainView>();
     assert!(view.voxels.contains_key(&pos));
-    assert!(!view
-        .edit_protected
-        .get(&pos.coord)
-        .is_some_and(|spans| spans
+    assert!(!view.edit_protected.get(&pos.coord).is_some_and(|spans| {
+        spans
             .iter()
-            .any(|(low, high)| (*low..=*high).contains(&pos.level))));
+            .any(|(low, high)| (*low..=*high).contains(&pos.level))
+    }));
     let revision = view.revision;
     let impact = TerrainImpact {
         batch: TerrainBatchId(90_001),
@@ -453,11 +464,13 @@ fn tall_fort_route_wall_stops_motion_then_clear_and_retry_succeeds_without_telep
         });
     }
     tick(&mut fixture);
-    assert!(cells.iter().all(|pos| fixture
-        .world()
-        .resource::<ArenaTerrainView>()
-        .voxels
-        .contains_key(pos)));
+    assert!(cells.iter().all(|pos| {
+        fixture
+            .world()
+            .resource::<ArenaTerrainView>()
+            .voxels
+            .contains_key(pos)
+    }));
     for _ in 0..240 {
         aim_and_run(&mut fixture, destination);
         tick(&mut fixture);
@@ -483,11 +496,13 @@ fn tall_fort_route_wall_stops_motion_then_clear_and_retry_succeeds_without_telep
             .write_message(TerrainEdit::Clear { pos: *pos });
     }
     tick(&mut fixture);
-    assert!(cells.iter().all(|pos| !fixture
-        .world()
-        .resource::<ArenaTerrainView>()
-        .voxels
-        .contains_key(pos)));
+    assert!(cells.iter().all(|pos| {
+        !fixture
+            .world()
+            .resource::<ArenaTerrainView>()
+            .voxels
+            .contains_key(pos)
+    }));
     let mut ticks = 0;
     move_to(
         &mut fixture,

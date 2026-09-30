@@ -2,7 +2,7 @@
 
 use super::*;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct Route {
     pub points: Vec<Vec3>,
     directions: Vec<Vec3>,
@@ -178,5 +178,18 @@ impl Route {
             self.clear();
         }
         work
+    }
+}
+
+impl Route {
+    pub(super) fn shift_clock(&mut self, delta: u64) {
+        for t in [
+            &mut self.planned_at,
+            &mut self.committed_until,
+            &mut self.progress_at,
+            &mut self.retry_after,
+        ] {
+            *t = t.saturating_add(delta);
+        }
     }
 }

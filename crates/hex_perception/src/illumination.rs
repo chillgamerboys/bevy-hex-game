@@ -6,8 +6,8 @@ use bevy_ecs::prelude::Resource;
 use bevy_ecs::reflect::ReflectResource;
 use bevy_reflect::Reflect;
 use hex_core::{
-    upper_dome_contains, ExactGridPoint, ExteriorIllumination, GameplayLight, IlluminationLevel,
-    LightDomain, TilePos,
+    upper_dome_contains, ExactGridPoint, ExteriorIllumination, GameplayLight, HexCoord,
+    IlluminationLevel, LightDomain, TilePos,
 };
 
 use crate::{PerceptionError, SurfaceSnapshots};
@@ -93,6 +93,42 @@ impl ResolvedIllumination {
     pub fn iter(&self) -> impl Iterator<Item = (TilePos, ResolvedLight)> + '_ {
         self.by_surface
             .iter()
+            .map(|(position, resolved)| (*position, *resolved))
+    }
+
+    /// Iterates over all exact surfaces in one horizontal column.
+    ///
+    /// [`TilePos`] orders the horizontal coordinate before its level, so this is a
+    /// bounded lookup in the canonical map rather than a scan of every world
+    /// surface. Stacked cave, bridge, and ground surfaces remain independently
+    /// addressable and retain exact-position ordering.
+    pub fn iter_at_coord(
+        &self,
+        coord: HexCoord,
+    ) -> impl Iterator<Item = (TilePos, ResolvedLight)> + '_ {
+        let bottom = TilePos::new(coord, i32::MIN);
+        let top = TilePos::new(coord, i32::MAX);
+        self.by_surface
+            .range(bottom..=top)
+            .map(|(position, resolved)| (*position, *resolved))
+    }
+
+    /// Iterates over every exact surface in one inclusive axial-row interval.
+    ///
+    /// Both endpoints must share their axial `q` component. Since [`TilePos`]
+    /// orders first by coordinate and then by level, one tree range covers every
+    /// stacked surface between the two `r` endpoints without probing each column.
+    pub(crate) fn iter_in_axial_row(
+        &self,
+        minimum: HexCoord,
+        maximum: HexCoord,
+    ) -> impl Iterator<Item = (TilePos, ResolvedLight)> + '_ {
+        debug_assert_eq!(minimum.x(), maximum.x());
+        debug_assert!(minimum.y() <= maximum.y());
+        let bottom = TilePos::new(minimum, i32::MIN);
+        let top = TilePos::new(maximum, i32::MAX);
+        self.by_surface
+            .range(bottom..=top)
             .map(|(position, resolved)| (*position, *resolved))
     }
 

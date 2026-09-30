@@ -118,7 +118,7 @@ fn accepted_setup_and_observer_input_do_not_control_monster_zero() {
         ActorIntent {
             movement: bevy_math::Vec2::ONE,
             aim: Vec3::X,
-            selected: Some(Spell::AreaBlast),
+            high_jump: true,
             cast_pressed: true,
             cast_released: true,
             ..Default::default()

@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "name": "understory-broadleaf-1",
+      "source": "assets/art/objects/plant/forest-expedition-understory-broadleaf-1.ron",
+      "sha256": "7f9695fb3160e9cb8e70e45b97bf47ef30ec0ce0a31db0150921cd9f931e4bb1",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "understory-broadleaf-2",
+      "source": "assets/art/objects/plant/forest-expedition-understory-broadleaf-2.ron",
+      "sha256": "4516d0bc7033434b58cddfb4e71124482160dd1604850769a0f2b069a7258f0f",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "understory-broadleaf-3",
+      "source": "assets/art/objects/plant/forest-expedition-understory-broadleaf-3.ron",
+      "sha256": "b5312e93209a8375ba00d44733fd5876f2d23445eb1243eeb72e2bf56fa4b062",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "understory-pine-1",
+      "source": "assets/art/objects/plant/forest-expedition-understory-pine-1.ron",
+      "sha256": "165faffcfe1628215b5c5d8e503b1d48f96d6d4fe8060c03d9e63c12ddeefc50",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "understory-pine-2",
+      "source": "assets/art/objects/plant/forest-expedition-understory-pine-2.ron",
+      "sha256": "15b03a2fd578d539fd8cb55ba94752a0a57330f77588a869dc60f508f07721cc",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "understory-pine-3",
+      "source": "assets/art/objects/plant/forest-expedition-understory-pine-3.ron",
+      "sha256": "96bf1c3ea196cc8a8fdd487f045e0a52f253ce4db542b580838977a48b580a09",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "landmark-1",
+      "source": "assets/art/objects/plant/forest-expedition-landmark-1.ron",
+      "sha256": "f7b3947e05a2c39e2ce508b7ab48750e63a72f0ac7c7175c287c48ab6473df84",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "landmark-2",
+      "source": "assets/art/objects/plant/forest-expedition-landmark-2.ron",
+      "sha256": "e6a03d5965b6a06a26a1d16ce4b62586a4b2c70916e3c694069838b70549c4cf",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "landmark-3",
+      "source": "assets/art/objects/plant/forest-expedition-landmark-3.ron",
+      "sha256": "137019a348af6c88c3e19517a25c57fc2d8cc00d09af51fe917e83aef3ed3ab6",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "ancient-1",
+      "source": "assets/art/objects/plant/forest-expedition-ancient-1.ron",
+      "sha256": "17b3c38f212571f34145c4dc79529e7ab55aa976483db2c110d1b01f40387a19",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "ancient-2",
+      "source": "assets/art/objects/plant/forest-expedition-ancient-2.ron",
+      "sha256": "8332413cf53befbb6cbb9dfa2a10bab0b5edc0de5b94caeda1e4913d8eda9833",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "ancient-3",
+      "source": "assets/art/objects/plant/forest-expedition-ancient-3.ron",
+      "sha256": "92aa6f4b4643eea0dc148b8c1e1e51d4c25d58e1731aad62f57b43b73bc697c1",
+      "source_revision": "e8ecd0ab5bd29e348a84614b7243a655dc1a5e54"
+    },
+    {
+      "name": "grove-1",
+      "source": "tools/forest_trees.py",
+      "sha256": "a7376a2557c5fb4331137b278fbd6c7d463bccc3be204b3df2e85c2cde69d18d",
+      "parameters": {
+        "height": 80,
+        "radius": 12,
+        "seed": 20260927
+      },
+      "source_revision": "0e8affca759447a94fc441b0c673f3c6b2152740"
+    },
+    {
+      "name": "grove-2",
+      "source": "tools/forest_trees.py",
+      "sha256": "a7376a2557c5fb4331137b278fbd6c7d463bccc3be204b3df2e85c2cde69d18d",
+      "parameters": {
+        "height": 97,
+        "radius": 14,
+        "seed": 20260928
+      },
+      "source_revision": "0e8affca759447a94fc441b0c673f3c6b2152740"
+    },
+    {
+      "name": "grove-3",
+      "source": "tools/forest_trees.py",
+      "sha256": "a7376a2557c5fb4331137b278fbd6c7d463bccc3be204b3df2e85c2cde69d18d",
+      "parameters": {
+        "height": 114,
+        "radius": 16,
+        "seed": 20260929
+      },
+      "source_revision": "0e8affca759447a94fc441b0c673f3c6b2152740"
+    }
+  ]
+}

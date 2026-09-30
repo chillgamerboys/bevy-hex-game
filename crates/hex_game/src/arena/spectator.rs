@@ -253,7 +253,10 @@ pub(super) fn focus_live(camera: &mut ObserverCamera, session: &ArenaSession) {
 }
 
 /// Public camera/frustum admission only; never treats this as a pixel verdict.
-pub(super) fn close_subjects(session: &ArenaSession, camera: &Transform) -> Vec<u8> {
+pub(super) fn close_subjects(
+    session: &ArenaSession,
+    camera: &Transform,
+) -> Vec<hex_arena::ActorId> {
     session
         .actors
         .iter()
@@ -276,7 +279,7 @@ pub(super) fn close_subjects(session: &ArenaSession, camera: &Transform) -> Vec<
         .collect()
 }
 
-pub(super) fn both_teams_visible(session: &ArenaSession, subjects: &[u8]) -> bool {
+pub(super) fn both_teams_visible(session: &ArenaSession, subjects: &[hex_arena::ActorId]) -> bool {
     session.accepted_battle_setup().rosters.len() == 2
         && session
             .accepted_battle_setup()

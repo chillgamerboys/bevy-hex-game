@@ -4,7 +4,7 @@
 //! treads sit on radial stone haunches, and the shell/crown are separate occupied
 //! runs. Only crystal silhouettes and summit trees vary with the seed.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hex_assets::{HexObjectRotation, RuntimeArtCatalog};
 use hex_core::{
@@ -13,7 +13,8 @@ use hex_core::{
 };
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
-use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::layout::{resolve_layout, LayoutKind, PatchId, ResolvedLayoutPlan};
+use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seed::SeedStream;
 use super::selection::{
@@ -72,6 +73,261 @@ const SUMMIT_CLEARING: &str = "crystal_ascent.summit_clearing";
 const MID_FLIGHT: &str = "crystal_ascent.mid_flight";
 const CORNER_LANDING: &str = "crystal_ascent.corner_landing";
 const UPPER_CONTRACTION: &str = "crystal_ascent.upper_contraction";
+
+/// Resolves the exact world-space upper terminal before the authored fragment is built.
+///
+/// Macro seam selection consumes this same local-frame projection so its explicit
+/// four-wide summit port cannot drift to another segment of the landmark boundary.
+pub(crate) fn macro_upper_terminal_coords(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+    summit_level: Level,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    radial_pad(31, 3, 4, summit_level)
+        .into_iter()
+        .map(|position| frame.to_world(position.coord))
+        .collect()
+}
+
+/// Highest authored terrain surface produced by Crystal Ascent's shell,
+/// buttresses, and pointed ribs.
+///
+/// Composite highland screens use this exact derived value rather than the
+/// summit datum: a low natural saddle which clears the wooded crown can still
+/// expose the taller outer ribs. Keeping the query beside the authored rib
+/// projection prevents those two contracts from drifting independently.
+pub(crate) fn macro_highest_authored_surface_level(settings: &V3CrystalAscentSettings) -> Level {
+    expected_rib_voxels(settings)
+        .iter()
+        .map(|surface| surface.level)
+        .max()
+        .unwrap_or_else(|| settings.base_level.saturating_add(settings.rise_levels))
+}
+
+/// Highest worked-stone voxel on each buried outer-shell column.
+///
+/// Grand's natural terrain needs only to conceal the architecture it actually
+/// touches.  A single global maximum would raise the low Frozen-Woods side of
+/// the shell to the height of an unrelated pointed rib, so publish the exact
+/// per-column profile from the same shell, buttress, and rib geometry used by
+/// the standalone recipe.
+pub(crate) fn macro_composite_exterior_worked_tops(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+    settings: &V3CrystalAscentSettings,
+) -> Result<BTreeMap<HexCoord, Level>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    let shell_top = settings
+        .base_level
+        .saturating_add(settings.rise_levels)
+        .saturating_add(8);
+    let mut local_tops = ring_coordinates(SHELL_OUTER_RADIUS)
+        .into_iter()
+        .filter(|coord| !is_lower_aperture(*coord) && !is_upper_trail(*coord))
+        .map(|coord| (coord, shell_top))
+        .collect::<BTreeMap<_, _>>();
+    for (coord, top_exclusive) in expected_buttress_columns(settings) {
+        if let Some(top) = local_tops.get_mut(&coord) {
+            *top = (*top).max(top_exclusive.saturating_sub(1));
+        }
+    }
+    for position in expected_rib_voxels(settings) {
+        if let Some(top) = local_tops.get_mut(&position.coord) {
+            *top = (*top).max(position.level);
+        }
+    }
+    local_tops
+        .into_iter()
+        .map(|(coord, level)| frame.to_world(coord).map(|world| (world, level)))
+        .collect()
+}
+
+/// Resolves the exact worked-shell columns buried beneath natural alpine
+/// overburden in a composite world.
+///
+/// The standalone landmark never consumes this projection. The composite
+/// adapter adds real Stone and Snow occupancy above these exact roof columns,
+/// while the lower pointed aperture and upper summit trail remain unchanged.
+pub(crate) fn macro_composite_natural_shell_skin_coords(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+) -> Result<BTreeSet<HexCoord>, String> {
+    Ok(
+        macro_composite_natural_shell_overburden(mask, rotation_turns)?
+            .into_keys()
+            .collect(),
+    )
+}
+
+/// Exact rotation-stable thickness of the composite-only natural shell cover.
+///
+/// Thickness rises gently toward the chamber and has a bounded two-level
+/// chisel. This makes the cover visibly irregular without introducing a new
+/// cylindrical cap or a local step larger than three levels solely from the
+/// cover profile.
+pub(crate) fn macro_composite_natural_shell_overburden(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+) -> Result<BTreeMap<HexCoord, Level>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    (SHELL_INNER_RADIUS..=SHELL_OUTER_RADIUS)
+        .flat_map(ring_coordinates)
+        .filter(|coord| !is_lower_aperture(*coord) && !is_upper_trail(*coord))
+        .map(|coord| {
+            let radial_rise = i32::try_from(
+                SHELL_OUTER_RADIUS.saturating_sub(coord.distance(HexCoord::ORIGIN)) / 2,
+            )
+            .unwrap_or_default();
+            let [x, y, z] = coord.to_cubic_array();
+            let chisel = x
+                .saturating_mul(17)
+                .saturating_add(y.saturating_mul(31))
+                .saturating_add(z.saturating_mul(13))
+                .rem_euclid(3);
+            let thickness = 2_i32.saturating_add(radial_rise).saturating_add(chisel);
+            frame
+                .to_world(coord)
+                .map(|world_coord| (world_coord, thickness))
+        })
+        .collect()
+}
+
+/// Resolves the exact shell columns intentionally left architecturally visible
+/// at the two composite openings.
+pub(crate) fn macro_composite_exposed_shell_opening_coords(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let lower = macro_composite_lower_aperture_coords(mask, rotation_turns)?;
+    let upper = macro_composite_upper_trail_coords(mask, rotation_turns)?;
+    Ok(lower.union(&upper).copied().collect())
+}
+
+/// Resolves every exact twelve-wide floor column through the composite lower
+/// aperture. These authored floors remain worked stone; neighboring natural
+/// overburden may conceal the shell but may not cap or fill this passage.
+pub(crate) fn macro_composite_lower_aperture_coords(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    (SHELL_INNER_RADIUS..=SHELL_OUTER_RADIUS)
+        .flat_map(|radius| radial_coords(radius, 0, 12))
+        .map(|coord| frame.to_world(coord))
+        .collect()
+}
+
+/// Resolves the exact pointed-arch clearance above each floor on the outer
+/// twelve-wide row of the lower aperture.
+pub(crate) fn macro_composite_lower_aperture_headrooms(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+) -> Result<BTreeMap<HexCoord, Level>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    radial_coords(SHELL_OUTER_RADIUS, 0, 12)
+        .into_iter()
+        .map(|coord| {
+            frame
+                .to_world(coord)
+                .map(|world_coord| (world_coord, pointed_arch_clearance(coord)))
+        })
+        .collect()
+}
+
+/// Resolves every exact four-wide grass surface through the composite summit
+/// opening. The trail is not part of the buried shell and retains traversal
+/// clearance where an authored upper circuit crosses overhead.
+pub(crate) fn macro_composite_upper_trail_coords(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    (SHELL_INNER_RADIUS..=SHELL_OUTER_RADIUS)
+        .flat_map(|radius| radial_coords(radius, 3, 4))
+        .map(|coord| frame.to_world(coord))
+        .collect()
+}
+
+/// Resolves the complete shell band which the composite presentation must
+/// partition between natural skin and the two exact authored openings.
+pub(crate) fn macro_composite_shell_band_coords(
+    mask: &BTreeSet<HexCoord>,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, 0)?;
+    (SHELL_INNER_RADIUS..=SHELL_OUTER_RADIUS)
+        .flat_map(ring_coordinates)
+        .map(|coord| frame.to_world(coord))
+        .collect()
+}
+
+/// Resolves every authored stair-plinth column in world space for Macro validation.
+///
+/// The landmark validates these columns before composition, while Macro calls this
+/// again after every fragment has been merged and the spanning tunnel has been
+/// carved. Keeping the footprint here prevents the two validators from drifting.
+pub(crate) fn macro_stair_base_plinth_columns(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    (CHAMBER_RADIUS.saturating_add(1)..SHELL_INNER_RADIUS)
+        .flat_map(ring_coordinates)
+        .map(|coord| frame.to_world(coord))
+        .collect()
+}
+
+/// Resolves the authored four-wide summit trail rows consumed by a Macro seam.
+pub(crate) fn macro_upper_terminal_approach_coords(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+    summit_level: Level,
+    approach_depth: u32,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    (0..approach_depth)
+        .flat_map(|offset| radial_pad(SITE_RADIUS.saturating_sub(offset), 3, 4, summit_level))
+        .map(|position| frame.to_world(position.coord))
+        .collect()
+}
+
+/// Resolves four-wide rows immediately outside the authored summit boundary.
+///
+/// Composite worlds use these rows to join the exact radius-32 landmark to its
+/// surrounding biome without rotating the landmark from its lower terminal alone.
+/// Offset one is the first row wholly outside the claimed Crystal site.
+pub(crate) fn macro_upper_terminal_outward_rows(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+    summit_level: Level,
+    outside_depth: u32,
+) -> Result<Vec<BTreeSet<HexCoord>>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    (1..=outside_depth)
+        .map(|offset| {
+            let radius = SITE_RADIUS
+                .checked_add(offset)
+                .ok_or_else(|| "Crystal summit outward-row radius overflowed".to_owned())?;
+            radial_pad(radius, 3, 4, summit_level)
+                .into_iter()
+                .map(|position| frame.to_world(position.coord))
+                .collect()
+        })
+        .collect()
+}
+
+/// Resolves the exact world-space lower terminal for a Macro landmark.
+pub(crate) fn macro_lower_terminal_coords(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+    base_level: Level,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    radial_pad(SITE_RADIUS, 0, 4, base_level)
+        .into_iter()
+        .map(|position| frame.to_world(position.coord))
+        .collect()
+}
 
 /// Deterministic diagnostics for selection, reports, and acceptance tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,6 +597,7 @@ fn construct_patch_with_streams(
 
     let base = settings.base_level;
     let summit = base.saturating_add(settings.rise_levels);
+    let composite = patch.layout().kind.is_composite();
     let mut masses = local_mask
         .iter()
         .copied()
@@ -351,18 +608,34 @@ fn construct_patch_with_streams(
     for coord in &local_mask {
         let radius = coord.distance(HexCoord::ORIGIN);
         if radius > SITE_RADIUS {
-            add_ground(&mut masses, *coord, base, SolidMaterialRole::Grass);
-            surface_intents.insert(TilePos::new(*coord, base), exterior_surface());
-        } else if radius <= CHAMBER_RADIUS
-            || (radius < SHELL_INNER_RADIUS && is_lower_connector(*coord))
-            || (radius >= SHELL_INNER_RADIUS && is_lower_aperture(*coord))
-        {
+            // A Macro claim may retain a few central-cell fringe columns beyond
+            // the exact radius-32 authored site. Those columns belong to the
+            // high woodland crown, not the standalone level-six showcase apron.
+            // Standalone generation keeps its historical base-level grass.
+            let fringe_level = if composite { summit } else { base };
+            add_ground(&mut masses, *coord, fringe_level, SolidMaterialRole::Grass);
+            surface_intents.insert(TilePos::new(*coord, fringe_level), exterior_surface());
+        } else if radius < SHELL_INNER_RADIUS {
+            // Close the complete chamber-to-shell annulus at the chamber floor.
+            // Elevated stair haunches still carry only their authored taper, but
+            // they now rise from a founded stone plinth instead of floating over
+            // world void. Only the four-wide connector is ordinary traversal;
+            // the remaining flush plinth top is architectural backing.
+            add_ground(&mut masses, *coord, base, SolidMaterialRole::WorkedStone);
+            let metadata = if radius <= CHAMBER_RADIUS || is_lower_connector(*coord) {
+                interior_surface()
+            } else {
+                interior_architecture_surface(SurfaceAccess::SpecialMovement(SHELL_TOPS))
+            };
+            surface_intents.insert(TilePos::new(*coord, base), metadata);
+        } else if is_lower_aperture(*coord) {
             add_ground(&mut masses, *coord, base, SolidMaterialRole::WorkedStone);
             surface_intents.insert(TilePos::new(*coord, base), interior_surface());
         }
     }
 
     let mut geometry = build_stairs(&mut masses, &mut surface_intents, settings)?;
+    classify_stair_base_plinth(&masses, &mut surface_intents, base);
     build_shell(
         &mut masses,
         &mut surface_intents,
@@ -1672,6 +1945,19 @@ pub(crate) fn validate_crystal_ascent(
         ));
     }
 
+    'base_plinth: for radius in CHAMBER_RADIUS.saturating_add(1)..SHELL_INNER_RADIUS {
+        for coord in ring_coordinates(radius) {
+            for level in 0..=base {
+                if solid_material_at(&plan.volume, coord, level).is_none() {
+                    issues.push(recipe_issue(format!(
+                        "stair base plinth leaves world void below {coord:?} at level {level}"
+                    )));
+                    break 'base_plinth;
+                }
+            }
+        }
+    }
+
     let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
     let distances = ordinary.distances_from(lower);
     let reverse_distances = ordinary.distances_from(upper);
@@ -1688,6 +1974,32 @@ pub(crate) fn validate_crystal_ascent(
         issues.push(recipe_issue(
             "Crystal Ascent cannot derive all three authored stair circuits",
         ));
+    }
+    let expected_stair_surfaces = expected_circuits
+        .iter()
+        .flat_map(|surfaces| surfaces.iter().copied())
+        .collect::<BTreeSet<_>>();
+    'plinth_access: for radius in CHAMBER_RADIUS.saturating_add(1)..SHELL_INNER_RADIUS {
+        for coord in ring_coordinates(radius) {
+            let surface = TilePos::new(coord, base);
+            if let Some(metadata) = plan.volume.surfaces.get(&surface) {
+                if metadata.interior != Some(INTERIOR) {
+                    issues.push(recipe_issue(format!(
+                        "stair base plinth leaves an exterior daylight surface at {surface:?}"
+                    )));
+                    break 'plinth_access;
+                }
+                if metadata.access == SurfaceAccess::Ordinary
+                    && !is_lower_connector(coord)
+                    && !expected_stair_surfaces.contains(&surface)
+                {
+                    issues.push(recipe_issue(format!(
+                        "stair base plinth exposes an unintended ordinary shortcut at {surface:?}"
+                    )));
+                    break 'plinth_access;
+                }
+            }
+        }
     }
     match expected_stair_haunch_thicknesses(&expected_circuits) {
         Ok(haunches) => {
@@ -2034,11 +2346,24 @@ pub(crate) fn validate_crystal_ascent(
             .get(name)
             .is_some_and(|route| {
                 route.surfaces == *expected
+                    && !route.centerline.is_empty()
+                    && route
+                        .centerline
+                        .iter()
+                        .all(|position| expected.contains(position))
                     && route
                         .centerline
                         .iter()
                         .copied()
-                        .eq(expected.iter().copied())
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                        == route.centerline.len()
+                    && route.centerline.windows(2).all(|pair| {
+                        let [from, to] = pair else {
+                            return false;
+                        };
+                        from.coord.distance(to.coord) == 1 && from.level.abs_diff(to.level) <= 1
+                    })
             });
         if !exact || expected.iter().any(|surface| !ordinary.contains(*surface)) {
             issues.push(recipe_issue(format!(
@@ -2112,15 +2437,17 @@ pub(crate) fn validate_crystal_ascent(
         let actual = plan
             .volume
             .surfaces
-            .keys()
-            .copied()
-            .filter(|surface| {
-                surface.level == base && surface.coord.distance(HexCoord::ORIGIN) == radius
+            .iter()
+            .filter_map(|(surface, metadata)| {
+                (metadata.access == SurfaceAccess::Ordinary
+                    && surface.level == base
+                    && surface.coord.distance(HexCoord::ORIGIN) == radius)
+                    .then_some(*surface)
             })
             .collect::<BTreeSet<_>>();
         if actual != expected {
             issues.push(recipe_issue(format!(
-                "interior approach radius {radius} does not narrow to the exact four-wide route"
+                "interior approach radius {radius} does not narrow to the exact four-wide ordinary route"
             )));
         }
     }
@@ -2462,28 +2789,46 @@ pub(crate) fn validate_crystal_ascent(
     })
 }
 
+/// Validates the complete authored landmark while it is still a patch-local
+/// fragment, before Macro namespaces its IDs and aliases into the combined
+/// world. This deliberately skips the standalone radius contract: the resolved
+/// Macro mask remains authoritative, while every stair, shell, light, blocker,
+/// interior, and terminal invariant stays identical to the standalone recipe.
+pub(crate) fn validate_composite_fragment(
+    fragment: &GeneratedPatchPlan,
+    layout: &ResolvedLayoutPlan,
+    settings: &V3CrystalAscentSettings,
+    objects: &CrystalAscentObjectSet,
+) -> WorldValidation<CrystalAscentMetrics> {
+    let patch = match PatchRecipeContext::resolve(layout, fragment.patch_id) {
+        Ok(patch) => patch,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Crystal Ascent composite fragment has no resolved Macro patch: {error}"
+            ))]);
+        }
+    };
+    let frame = match patch.local_frame() {
+        Ok(frame) => frame,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Crystal Ascent composite frame could not be resolved: {error}"
+            ))]);
+        }
+    };
+    let isolated = match frame.canonical_local_world(fragment) {
+        Ok(isolated) => isolated,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Crystal Ascent composite fragment could not be normalized: {error}"
+            ))]);
+        }
+    };
+    validate_crystal_ascent(&isolated, settings, objects)
+}
+
 fn exact_clear_levels_above(volume: &VolumePlan, surface: TilePos) -> Option<Level> {
-    volume.surfaces.get(&surface)?;
-    let from = surface.level.checked_add(1)?;
-    let column = volume.columns.get(&surface.coord)?;
-    Some(
-        column
-            .elements
-            .iter()
-            .filter_map(|element| {
-                let levels = match *element {
-                    VolumeElement::Solid(mass) => mass.levels,
-                    VolumeElement::Fill(fill) => fill.levels,
-                };
-                if levels.bottom <= from && from < levels.top {
-                    Some(0)
-                } else {
-                    (levels.bottom > from).then_some(levels.bottom.saturating_sub(from))
-                }
-            })
-            .min()
-            .unwrap_or(i32::MAX),
-    )
+    volume.surface_clearance(surface)
 }
 
 fn solid_material_at(
@@ -2787,11 +3132,100 @@ const fn shell_top_surface() -> SurfaceMetadata {
     }
 }
 
+const fn interior_architecture_surface(access: SurfaceAccess) -> SurfaceMetadata {
+    SurfaceMetadata {
+        access,
+        interior: Some(INTERIOR),
+    }
+}
+
+fn classify_stair_base_plinth(
+    masses: &BTreeMap<HexCoord, Vec<MassSpec>>,
+    surface_intents: &mut BTreeMap<TilePos, SurfaceMetadata>,
+    base: Level,
+) {
+    for radius in CHAMBER_RADIUS.saturating_add(1)..SHELL_INNER_RADIUS {
+        for coord in ring_coordinates(radius) {
+            let surface = TilePos::new(coord, base);
+            if surface_intents
+                .get(&surface)
+                .is_some_and(|metadata| metadata.access == SurfaceAccess::Ordinary)
+            {
+                continue;
+            }
+            let low_overhead = (base.saturating_add(1)..=base.saturating_add(2)).any(|level| {
+                masses.get(&coord).is_some_and(|column| {
+                    column
+                        .iter()
+                        .any(|mass| mass.bottom <= level && level < mass.top)
+                })
+            });
+            surface_intents.insert(
+                surface,
+                if low_overhead {
+                    interior_architecture_surface(SurfaceAccess::NonStandable)
+                } else {
+                    interior_architecture_surface(SurfaceAccess::SpecialMovement(SHELL_TOPS))
+                },
+            );
+        }
+    }
+}
+
 fn protected_route(surfaces: &BTreeSet<TilePos>) -> ProtectedFeatureRoute {
     ProtectedFeatureRoute {
-        centerline: surfaces.iter().copied().collect(),
+        centerline: connected_surface_spine(surfaces)
+            .unwrap_or_else(|| surfaces.iter().copied().take(1).collect()),
         surfaces: surfaces.clone(),
     }
+}
+
+fn connected_surface_spine(surfaces: &BTreeSet<TilePos>) -> Option<Vec<TilePos>> {
+    let seed = surfaces.first().copied()?;
+    let (first, _) = farthest_surface(seed, surfaces);
+    let (second, parent) = farthest_surface(first, surfaces);
+    let mut reversed = vec![second];
+    let mut current = second;
+    while current != first {
+        current = parent.get(&current).copied()?;
+        reversed.push(current);
+        if reversed.len() > surfaces.len() {
+            return None;
+        }
+    }
+    reversed.reverse();
+    Some(reversed)
+}
+
+fn farthest_surface(
+    start: TilePos,
+    surfaces: &BTreeSet<TilePos>,
+) -> (TilePos, BTreeMap<TilePos, TilePos>) {
+    let mut frontier = VecDeque::from([start]);
+    let mut distance = BTreeMap::from([(start, 0_u32)]);
+    let mut parent = BTreeMap::new();
+    let mut farthest = start;
+    while let Some(current) = frontier.pop_front() {
+        let current_distance = distance.get(&current).copied().unwrap_or_default();
+        if current_distance > distance.get(&farthest).copied().unwrap_or_default()
+            || (current_distance == distance.get(&farthest).copied().unwrap_or_default()
+                && current < farthest)
+        {
+            farthest = current;
+        }
+        let mut neighbors = current.coord.neighbors();
+        neighbors.sort_unstable();
+        for coord in neighbors {
+            let neighbor = TilePos::new(coord, current.level);
+            if !surfaces.contains(&neighbor) || distance.contains_key(&neighbor) {
+                continue;
+            }
+            distance.insert(neighbor, current_distance.saturating_add(1));
+            parent.insert(neighbor, current);
+            frontier.push_back(neighbor);
+        }
+    }
+    (farthest, parent)
 }
 
 fn fallback_priority(coord: HexCoord, salt: u64) -> u64 {
@@ -2905,6 +3339,53 @@ mod tests {
 
     fn raw_plan(rise_levels: Level) -> (GeneratedWorldPlan, CrystalAscentObjectSet) {
         raw_plan_with_mode(rise_levels, PatchBuildMode::CanonicalFallback)
+    }
+
+    #[test]
+    fn protected_route_centerlines_are_contiguous_spines_not_sorted_footprints() {
+        let (plan, _) = raw_plan(144);
+        for name in [LOWER_TERMINAL, UPPER_TERMINAL, EXIT_TRAIL] {
+            let route = plan
+                .features
+                .protected_routes
+                .get(name)
+                .expect("Crystal route should be published");
+            assert!(route.centerline.len() >= 2);
+            assert!(route
+                .centerline
+                .iter()
+                .all(|position| route.surfaces.contains(position)));
+            assert_eq!(
+                route
+                    .centerline
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+                route.centerline.len()
+            );
+            assert!(route.centerline.windows(2).all(|pair| {
+                let [from, to] = pair else {
+                    return false;
+                };
+                from.coord.distance(to.coord) == 1 && from.level.abs_diff(to.level) <= 1
+            }));
+        }
+        let settings = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        assert!(expected_summit_trail(&settings)
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| {
+                let [from, to] = pair else {
+                    return false;
+                };
+                from.coord.distance(to.coord) > 1
+            }));
     }
 
     fn exact_radius_site_layout() -> ResolvedLayoutPlan {
@@ -3067,6 +3548,86 @@ mod tests {
     }
 
     #[test]
+    fn stair_base_plinth_closes_the_chamber_to_shell_annulus_without_shortcuts() {
+        for rise_levels in [100, 144, 200] {
+            let (plan, objects) = raw_plan(rise_levels);
+            let _metrics = validated_metrics(&plan, &objects, rise_levels);
+            let settings = V3CrystalAscentSettings {
+                base_level: 6,
+                rise_levels,
+            };
+            let expected_stairs = expected_all_stair_surfaces(&settings);
+            let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
+            let mut founded_columns = 0_usize;
+
+            for radius in CHAMBER_RADIUS.saturating_add(1)..SHELL_INNER_RADIUS {
+                for coord in ring_coordinates(radius) {
+                    founded_columns = founded_columns.saturating_add(1);
+                    for level in 0..=settings.base_level {
+                        assert!(
+                            solid_material_at(&plan.volume, coord, level).is_some(),
+                            "rise {rise_levels} leaves world void below the stair base at {coord:?}, level {level}"
+                        );
+                    }
+
+                    let base_surface = TilePos::new(coord, settings.base_level);
+                    if let Some(metadata) = plan.volume.surfaces.get(&base_surface) {
+                        assert_eq!(
+                            metadata.interior,
+                            Some(INTERIOR),
+                            "the stair plinth must remain in the Crystal Dark domain at {base_surface:?}"
+                        );
+                    }
+                    if !is_lower_connector(coord) && !expected_stairs.contains(&base_surface) {
+                        assert!(
+                            !ordinary.contains(base_surface),
+                            "the founded stair plinth must not create an ordinary shortcut at {base_surface:?}"
+                        );
+                    }
+                }
+            }
+
+            assert_eq!(founded_columns, 612);
+        }
+    }
+
+    #[test]
+    fn validator_rejects_world_void_below_the_stair_base_plinth() {
+        let (mut plan, objects) = raw_plan(144);
+        let coord = ring_coordinates(CHAMBER_RADIUS.saturating_add(1))
+            .into_iter()
+            .find(|coord| !is_lower_connector(*coord))
+            .expect("the stair plinth should contain a non-route column");
+        let foundation = plan
+            .volume
+            .columns
+            .get_mut(&coord)
+            .expect("the stair plinth column should exist")
+            .elements
+            .iter_mut()
+            .find_map(|element| match element {
+                VolumeElement::Solid(mass) if mass.levels.bottom == 0 => Some(mass),
+                _ => None,
+            })
+            .expect("the stair plinth should begin with a bedrock run");
+        foundation.levels.bottom = 1;
+
+        let WorldValidation::Invalid(issues) = validate_crystal_ascent(
+            &plan,
+            &V3CrystalAscentSettings {
+                base_level: 6,
+                rise_levels: 144,
+            },
+            &objects,
+        ) else {
+            panic!("an unfounded stair plinth must invalidate Crystal Ascent")
+        };
+        assert!(issues
+            .iter()
+            .any(|issue| { issue.detail.contains("stair base plinth leaves world void") }));
+    }
+
+    #[test]
     fn stair_treads_retain_exact_radial_stone_haunches() {
         for rise_levels in [100, 144, 200] {
             let (plan, objects) = raw_plan(rise_levels);
@@ -3141,7 +3702,9 @@ mod tests {
                     )
                     .expect("four authored lanes fit a level");
                     assert!(
-                        haunches.get(surface).is_some_and(|actual| *actual >= expected),
+                        haunches
+                            .get(surface)
+                            .is_some_and(|actual| *actual >= expected),
                         "circuit {circuit} radius {radius} must deepen outward to at least {expected} voxels"
                     );
                 }
@@ -3227,9 +3790,11 @@ mod tests {
         else {
             panic!("over-deep haunch must fail recipe validation");
         };
-        assert!(issues.iter().any(|issue| issue
-            .detail
-            .contains("extends beneath its exact 8-voxel support")));
+        assert!(issues.iter().any(|issue| {
+            issue
+                .detail
+                .contains("extends beneath its exact 8-voxel support")
+        }));
     }
 
     #[test]
@@ -3746,6 +4311,10 @@ mod tests {
                         .join("; ")
                 )
             });
+            assert!(matches!(
+                validate_composite_fragment(&fragment, &layout, &recipe_settings, &objects),
+                WorldValidation::Valid(_)
+            ));
             assert_eq!(
                 fragment.volume.mask,
                 layout
@@ -3790,14 +4359,116 @@ mod tests {
             let local = frame
                 .canonical_local_world(&fragment)
                 .expect("production Macro semantics should normalize");
-            assert_eq!(local.volume, canonical.volume);
+            let authored_site = HexCoord::ORIGIN
+                .within_radius(SITE_RADIUS)
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            for coord in &authored_site {
+                assert_eq!(
+                    local.volume.columns.get(coord),
+                    canonical.volume.columns.get(coord),
+                    "Macro composition must preserve exact authored-site volume at {coord:?}"
+                );
+            }
+            for coord in ring_coordinates(SITE_RADIUS) {
+                for level in 0..=recipe_settings.base_level {
+                    assert!(
+                        solid_material_at(&local.volume, coord, level).is_some(),
+                        "the exact radius-32 Macro seam must remain founded at {coord:?}, level {level}"
+                    );
+                }
+            }
+            let local_site_surfaces = local
+                .volume
+                .surfaces
+                .iter()
+                .filter(|(surface, _)| authored_site.contains(&surface.coord))
+                .collect::<BTreeMap<_, _>>();
+            let canonical_site_surfaces = canonical
+                .volume
+                .surfaces
+                .iter()
+                .filter(|(surface, _)| authored_site.contains(&surface.coord))
+                .collect::<BTreeMap<_, _>>();
+            assert_eq!(local_site_surfaces, canonical_site_surfaces);
+            let composite_fringe = local
+                .volume
+                .mask
+                .difference(&authored_site)
+                .copied()
+                .collect::<BTreeSet<_>>();
+            assert!(!composite_fringe.is_empty());
+            for coord in &composite_fringe {
+                let surface = TilePos::new(*coord, 150);
+                assert!(local.volume.surfaces.contains_key(&surface));
+                assert_eq!(
+                    solid_material_at(&local.volume, *coord, 150),
+                    Some(SolidMaterialRole::Grass)
+                );
+                assert!(!local.volume.surfaces.contains_key(&TilePos::new(*coord, 6)));
+                for level in 0..=150 {
+                    assert!(
+                        solid_material_at(&local.volume, *coord, level).is_some(),
+                        "the high Macro fringe must remain continuously founded at {coord:?}, level {level}"
+                    );
+                }
+            }
             assert_eq!(local.features, canonical.features);
             assert_eq!(local.structures, canonical.structures);
             assert_eq!(local.blockers, canonical.blockers);
             assert_eq!(local.lights, canonical.lights);
-            assert_eq!(local.biome_regions, canonical.biome_regions);
+            assert_eq!(
+                local
+                    .biome_regions
+                    .iter()
+                    .filter(|(surface, _)| authored_site.contains(&surface.coord))
+                    .collect::<BTreeMap<_, _>>(),
+                canonical
+                    .biome_regions
+                    .iter()
+                    .filter(|(surface, _)| authored_site.contains(&surface.coord))
+                    .collect::<BTreeMap<_, _>>()
+            );
             assert_eq!(local.interiors, canonical.interiors);
             assert_eq!(local.anchors, canonical.anchors);
+        }
+    }
+
+    #[test]
+    fn composite_natural_shell_skin_partitions_only_the_two_authored_openings() {
+        for rotation_turns in 0..6 {
+            let layout = translated_rotated_macro_site_layout(rotation_turns);
+            let patch = layout
+                .patches
+                .get(&PatchId(0))
+                .expect("translated Crystal patch exists");
+            let skin = macro_composite_natural_shell_skin_coords(&patch.mask, patch.rotation_turns)
+                .expect("composite natural skin resolves");
+            let overburden =
+                macro_composite_natural_shell_overburden(&patch.mask, patch.rotation_turns)
+                    .expect("composite natural overburden resolves");
+            let openings =
+                macro_composite_exposed_shell_opening_coords(&patch.mask, patch.rotation_turns)
+                    .expect("composite opening allowance resolves");
+            let complete_shell = skin.union(&openings).copied().collect::<BTreeSet<_>>();
+            let resolved_shell = macro_composite_shell_band_coords(&patch.mask)
+                .expect("complete composite shell band resolves");
+            let expected_shell_columns = usize::try_from(
+                (SHELL_INNER_RADIUS..=SHELL_OUTER_RADIUS).fold(0_u32, |total, radius| {
+                    total.saturating_add(radius.saturating_mul(6))
+                }),
+            )
+            .expect("small shell-column count fits usize");
+
+            assert!(skin.is_disjoint(&openings));
+            assert_eq!(skin, overburden.keys().copied().collect());
+            assert_eq!(complete_shell, resolved_shell);
+            assert_eq!(complete_shell.len(), expected_shell_columns);
+            assert!(complete_shell.is_subset(&patch.mask));
+            assert_eq!(openings.len(), 80);
+            assert_eq!(skin.len(), expected_shell_columns - openings.len());
+            let thicknesses = overburden.values().copied().collect::<BTreeSet<_>>();
+            assert_eq!(thicknesses, BTreeSet::from([2, 3, 4, 5, 6]));
         }
     }
 
@@ -3843,9 +4514,11 @@ mod tests {
         else {
             panic!("moving one light to another fixture must invalidate Crystal Ascent")
         };
-        assert!(issues.iter().any(|issue| issue
-            .detail
-            .contains("exact Bright/Dim gameplay-light pair")));
+        assert!(issues.iter().any(|issue| {
+            issue
+                .detail
+                .contains("exact Bright/Dim gameplay-light pair")
+        }));
     }
 
     #[test]
@@ -3871,9 +4544,11 @@ mod tests {
         else {
             panic!("malforming one heart light must invalidate Crystal Ascent")
         };
-        assert!(issues.iter().any(|issue| issue
-            .detail
-            .contains("cathedral heart must own one exact Bright/Dim gameplay-light pair")));
+        assert!(issues.iter().any(|issue| {
+            issue
+                .detail
+                .contains("cathedral heart must own one exact Bright/Dim gameplay-light pair")
+        }));
     }
 
     #[test]

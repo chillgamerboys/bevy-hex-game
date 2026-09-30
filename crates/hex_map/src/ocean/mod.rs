@@ -1,0 +1,275 @@
+//! A camera-centered ocean with world-coherent, presentation-only swells.
+//!
+//! The host publishes immutable bathymetry and explicit shared time. Surface
+//! contact queries reuse this model without changing authoritative water volume.
+mod adapter;
+mod boundary;
+mod mesh;
+mod reflection;
+mod render;
+mod sample;
+mod shelter;
+mod wind;
+
+use bevy::prelude::*;
+use hex_core::ocean::{OceanSimulationTime, OceanWindProfile};
+
+pub use adapter::OceanSurfaceAdapter;
+pub use boundary::{OceanBoundaryColumn, OceanNearBoundary};
+pub use render::{install, OceanRenderStatus};
+pub use sample::{
+    sample_local_surface, sample_local_surface_at_time, sample_surface, sample_surface_at_time,
+    OceanSurfaceSample,
+};
+
+/// Shared near-detail extent keeps stepped water beside detailed ocean shores.
+pub(crate) const VOXEL_DETAIL_RADIUS: u16 = 144;
+
+/// One analytic directional swell, with world-unit amplitude and wavelength.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OceanWave {
+    /// Horizontal propagation direction, normalized when sampled.
+    pub direction: Vec2,
+    /// Maximum vertical contribution in world units.
+    pub amplitude: f32,
+    /// Distance between crests in world units.
+    pub wavelength: f32,
+    /// Seconds for one full oscillation.
+    pub period: f32,
+    /// Phase at the world origin and time zero, in radians.
+    pub phase_radians: f32,
+}
+
+/// World-owned visual ocean profile; ordinary liquids keep zero displacement.
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub struct OceanSurfaceProfile {
+    /// Positive height enables the accepted opaque voxel-wave presentation; zero keeps legacy swells.
+    pub voxel_height: f32,
+    /// Static physical sea surface, also the displacement's mean height.
+    pub mean_sea_level: f32,
+    /// The three slow swells; defaults have a combined maximum excursion of 3.5 units.
+    pub waves: [OceanWave; 3],
+    /// Positive depth at which swells reach their full amplitude.
+    pub shore_depth: f32,
+    /// Weak reflected component, normalized with its incident swell to preserve amplitude bounds.
+    pub shore_reflection: f32,
+    /// Shallow-water linear RGBA, before lighting and fog.
+    pub shallow_color: Vec4,
+    /// Deep-water linear RGBA, before lighting and fog.
+    pub deep_color: Vec4,
+    /// Opt-in slow wind response for opaque voxel waves. Publish the same
+    /// prevailing profile used by the environment's natural wind field.
+    pub wind_response: Option<OceanWindProfile>,
+}
+
+impl Default for OceanSurfaceProfile {
+    fn default() -> Self {
+        Self {
+            voxel_height: 0.0,
+            mean_sea_level: 0.0,
+            waves: [
+                OceanWave {
+                    direction: Vec2::new(0.94, 0.34),
+                    amplitude: 2.1,
+                    wavelength: 110.0,
+                    period: 18.0,
+                    phase_radians: 0.0,
+                },
+                OceanWave {
+                    direction: Vec2::new(-0.35, 0.94),
+                    amplitude: 1.05,
+                    wavelength: 180.0,
+                    period: 25.0,
+                    phase_radians: 1.3,
+                },
+                OceanWave {
+                    direction: Vec2::new(0.60, -0.80),
+                    amplitude: 0.35,
+                    wavelength: 60.0,
+                    period: 12.0,
+                    phase_radians: 2.4,
+                },
+            ],
+            shore_depth: 12.0,
+            shore_reflection: 0.15,
+            shallow_color: Vec4::new(0.025, 0.14, 0.23, 0.65),
+            deep_color: Vec4::new(0.009, 0.045, 0.110, 0.985),
+            wind_response: None,
+        }
+    }
+}
+
+impl OceanSurfaceProfile {
+    /// Align the fixed wave train with prevailing wind and enable gradual sea
+    /// state changes and shoreline breaking. No local actor/camera cover is used.
+    #[must_use]
+    pub fn with_wind_response(mut self, wind: OceanWindProfile) -> Self {
+        let previous = self
+            .wind_response
+            .map_or(std::f32::consts::FRAC_PI_2, |value| value.heading_radians);
+        let rotation = Vec2::from_angle(wind.heading_radians - previous);
+        for wave in &mut self.waves {
+            wave.direction = rotation.rotate(wave.direction);
+        }
+        self.wind_response = Some(wind);
+        self
+    }
+
+    /// Opaque waves in the accepted Water Lab style, with irregular ocean wave groups.
+    /// Three sizes travel roughly eastward and steepen in shallow water.
+    #[must_use]
+    pub fn regular_voxels(mean_sea_level: f32, voxel_height: f32) -> Self {
+        let primary = OceanWave {
+            direction: Vec2::X,
+            amplitude: 0.8,
+            wavelength: 28.0,
+            period: 9.0,
+            phase_radians: 0.0,
+        };
+        Self {
+            mean_sea_level,
+            voxel_height,
+            waves: [
+                primary,
+                OceanWave {
+                    direction: Vec2::new(0.951_056_54, 0.309_017),
+                    amplitude: 0.38,
+                    wavelength: 43.0,
+                    period: 12.5,
+                    phase_radians: 1.3,
+                },
+                OceanWave {
+                    direction: Vec2::new(0.906_307_8, -0.422_618_27),
+                    amplitude: 0.18,
+                    wavelength: 13.0,
+                    period: 6.0,
+                    phase_radians: 2.4,
+                },
+            ],
+            ..Self::default()
+        }
+    }
+
+    /// Rejects invalid uniforms before publishing a material or sampling a camera.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.voxel_height.is_finite()
+            && self.voxel_height >= 0.0
+            && self.mean_sea_level.is_finite()
+            && self.shore_depth.is_finite()
+            && self.shore_depth > 0.0
+            && self.shore_reflection.is_finite()
+            && (0.0..=0.25).contains(&self.shore_reflection)
+            && self.shallow_color.is_finite()
+            && self.deep_color.is_finite()
+            && self.wind_response.is_none_or(|wind| {
+                self.voxel_height > 0.0
+                    && wind.heading_radians.is_finite()
+                    && wind.speed.is_finite()
+                    && (0.0..=25.0).contains(&wind.speed)
+            })
+            && self.waves.iter().all(|wave| {
+                wave.direction.is_finite()
+                    && wave.direction.length_squared() > 0.0
+                    && wave.amplitude.is_finite()
+                    && wave.amplitude >= 0.0
+                    && wave.wavelength.is_finite()
+                    && wave.wavelength > 0.0
+                    && wave.period.is_finite()
+                    && wave.period > 0.0
+                    && wave.phase_radians.is_finite()
+            })
+    }
+}
+
+/// Regular, row-major world X/Z bathymetry sampled by both CPU and GPU.
+/// Heights describe the initial water footprint; live carving never simulates
+/// filling new columns. Increment `revision` after replacing this data.
+#[derive(Resource, Debug, Clone)]
+pub struct OceanBathymetry {
+    /// Identity of this exact height-grid publication.
+    pub revision: u64,
+    /// World X/Z of sample (0,0).
+    pub origin_xz: Vec2,
+    /// Positive world-unit separation between neighboring samples.
+    pub spacing: f32,
+    /// Samples along X.
+    pub width: u32,
+    /// Samples along Z.
+    pub height: u32,
+    /// Initial bed heights in world Y, Z-major then X.
+    pub bed_heights: Vec<f32>,
+    /// Cached shoreline-distance approximation, zero to one; empty means open sea.
+    /// This is visual shelter only, with no currents or directional wind simulation.
+    pub shore_shelter: Vec<f32>,
+    /// Cached nearest-shore X/Z anchors, matching the shelter grid; empty disables reflection.
+    pub shore_anchors: Vec<Vec2>,
+}
+
+impl Default for OceanBathymetry {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            origin_xz: Vec2::ZERO,
+            spacing: 1.0,
+            width: 2,
+            height: 2,
+            bed_heights: vec![-140.0; 4],
+            shore_shelter: Vec::new(),
+            shore_anchors: Vec::new(),
+        }
+    }
+}
+
+impl OceanBathymetry {
+    /// Checks bounded texture dimensions, exact sample count and finite heights.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.origin_xz.is_finite()
+            && self.spacing.is_finite()
+            && self.spacing > 0.0
+            && (2..=2048).contains(&self.width)
+            && (2..=2048).contains(&self.height)
+            && self
+                .width
+                .checked_mul(self.height)
+                .and_then(|n| usize::try_from(n).ok())
+                == Some(self.bed_heights.len())
+            && self.bed_heights.iter().all(|height| height.is_finite())
+            && (self.shore_anchors.is_empty()
+                || (self.shore_anchors.len() == self.bed_heights.len()
+                    && self.shore_anchors.iter().all(|point| point.is_finite())))
+            && (self.shore_shelter.is_empty()
+                || (self.shore_shelter.len() == self.bed_heights.len()
+                    && self
+                        .shore_shelter
+                        .iter()
+                        .all(|value| value.is_finite() && (0.0..=1.0).contains(value))))
+    }
+}
+
+/// Integration-owned camera and clock inputs; changing these never rebuilds meshes.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct OceanFrame {
+    /// Enable only for a map that publishes an ocean profile.
+    pub enabled: bool,
+    /// Actual world-space camera; the bounded mesh follows its horizontal position.
+    pub camera_position: Vec3,
+    /// Explicit seconds, frozen for review. The approved periods repeat at900s.
+    /// Do not feed the legacy liquid clock's incompatible400-second wrap.
+    pub phase_seconds: f32,
+    /// Preferred clock for wind-responsive water, including frozen captures.
+    /// `None` preserves callers that publish only the original bounded phase.
+    pub simulation_time: Option<OceanSimulationTime>,
+}
+
+impl OceanFrame {
+    /// Resolve one shared clock for uniforms and CPU camera contact.
+    #[must_use]
+    pub fn time(self) -> OceanSimulationTime {
+        self.simulation_time.unwrap_or(OceanSimulationTime {
+            generation: 0,
+            seconds: f64::from(self.phase_seconds),
+        })
+    }
+}

@@ -1,0 +1,261 @@
+{
+  "version": 1,
+  "scenario": "Grand V3 Baseline",
+  "seed": 1592598566,
+  "baseline": {
+    "world": "assets/config/worlds/procedural-grand-v3-baseline.ron",
+    "palette": "assets/art/palette.ron",
+    "scenarios": "assets/config/scenarios.ron",
+    "default_lighting": "assets/config/lighting.ron",
+    "overcast_lighting": "assets/config/lighting/overcast.ron",
+    "level_height": 0.35
+  },
+  "captures": [
+    {
+      "id": "01-world-topdown",
+      "filename": "01-world-topdown.png",
+      "camera": "map",
+      "view": "top-down"
+    },
+    {
+      "id": "02-highlands-oblique",
+      "filename": "02-highlands-oblique.png",
+      "camera": "map",
+      "view": "default",
+      "look_at_anchor": "grand_v3.massif_crest",
+      "look_at_offset": [110, 76, 115]
+    },
+    {
+      "id": "03-coast-river-outlet",
+      "filename": "03-coast-river-outlet.png",
+      "camera": "map",
+      "view": "default",
+      "look_at_anchor": "grand_v3.coast",
+      "look_at_offset": [50, 30, 55]
+    },
+    {
+      "id": "04-garden-island-oblique",
+      "filename": "04-garden-island-oblique.png",
+      "camera": "map",
+      "view": "default",
+      "look_at_anchor": "grand_v3.mountain_lake",
+      "look_at_offset": [58, 38, 62]
+    },
+    {
+      "id": "05-treeline-character",
+      "filename": "05-treeline-character.png",
+      "camera": "character",
+      "view": "rear",
+      "focus_anchor": "grand_v3.frozen_exit"
+    },
+    {
+      "id": "06-waterfall-character",
+      "filename": "06-waterfall-character.png",
+      "camera": "character",
+      "view": "rotated",
+      "focus_anchor": "grand_v3.waterfall_profile"
+    },
+    {
+      "id": "07-tunnel-first-person",
+      "filename": "07-tunnel-first-person.png",
+      "camera": "first-person",
+      "view": "default",
+      "focus_anchor": "grand_v3.tunnel_mouth"
+    },
+    {
+      "id": "08-crystal-bottom-chamber",
+      "filename": "08-crystal-bottom-chamber.png",
+      "camera": "character",
+      "view": "rotated",
+      "focus_anchor": "crystal_ascent.bottom_chamber"
+    }
+  ],
+  "capture_sets": {
+    "smoke": [
+      "01-world-topdown",
+      "02-highlands-oblique",
+      "03-coast-river-outlet",
+      "04-garden-island-oblique"
+    ],
+    "screen": [
+      "01-world-topdown",
+      "02-highlands-oblique",
+      "03-coast-river-outlet",
+      "04-garden-island-oblique",
+      "05-treeline-character",
+      "06-waterfall-character",
+      "07-tunnel-first-person",
+      "08-crystal-bottom-chamber"
+    ]
+  },
+  "profiles": [
+    {
+      "id": "e00-baseline",
+      "label": "Shipped noon baseline",
+      "axis": "baseline",
+      "time_hours": 12.0,
+      "fog_mode": "current",
+      "material_treatment": "current",
+      "edge_treatment": "current"
+    },
+    {
+      "id": "l01-midnight",
+      "label": "Clear midnight",
+      "axis": "lighting",
+      "time_hours": 0.0
+    },
+    {
+      "id": "l02-dawn",
+      "label": "Clear dawn",
+      "axis": "lighting",
+      "time_hours": 6.5
+    },
+    {
+      "id": "l03-golden",
+      "label": "Clear golden hour",
+      "axis": "lighting",
+      "time_hours": 16.5
+    },
+    {
+      "id": "l04-overcast",
+      "label": "Static overcast",
+      "axis": "lighting",
+      "lighting_asset": "assets/config/lighting/overcast.ron"
+    },
+    {
+      "id": "l05-soft-fill-noon",
+      "label": "Soft-fill noon",
+      "axis": "lighting",
+      "time_hours": 12.0,
+      "lighting_candidate": "tools/visual_experiments/lighting/l05-soft-fill-noon.json"
+    },
+    {
+      "id": "l06-high-contrast-noon",
+      "label": "High-contrast noon",
+      "axis": "lighting",
+      "time_hours": 12.0,
+      "lighting_candidate": "tools/visual_experiments/lighting/l06-high-contrast-noon.json"
+    },
+    {
+      "id": "z01-haze-light",
+      "label": "Promoted light-haze baseline control",
+      "axis": "haze",
+      "time_hours": 12.0,
+      "lighting_candidate": "tools/visual_experiments/lighting/z01-haze-light.json",
+      "baseline_alias": true
+    },
+    {
+      "id": "z02-haze-medium",
+      "label": "Medium distance haze",
+      "axis": "haze",
+      "time_hours": 12.0,
+      "lighting_candidate": "tools/visual_experiments/lighting/z02-haze-medium.json"
+    },
+    {
+      "id": "i01-crystal-tight",
+      "label": "Tighter crystal lights",
+      "axis": "indoor-lighting",
+      "time_hours": 12.0,
+      "crystal_light_profile": "i01-crystal-tight"
+    },
+    {
+      "id": "i02-crystal-broad",
+      "label": "Broader crystal lights",
+      "axis": "indoor-lighting",
+      "time_hours": 12.0,
+      "crystal_light_profile": "i02-crystal-broad"
+    },
+    {
+      "id": "i03-heart-feature-shadow",
+      "label": "One selectively shadowed heart light",
+      "axis": "indoor-lighting",
+      "time_hours": 12.0,
+      "crystal_light_profile": "i03-heart-feature-shadow"
+    },
+    {
+      "id": "v01-fog-none",
+      "label": "No tactical terrain shading",
+      "axis": "visibility",
+      "time_hours": 12.0,
+      "fog_mode": "none"
+    },
+    {
+      "id": "v02-fog-dimmed",
+      "label": "Dimmed tactical terrain shading",
+      "axis": "visibility",
+      "time_hours": 12.0,
+      "fog_mode": "dimmed"
+    },
+    {
+      "id": "v03-fog-observed-only",
+      "label": "Observed-only tactical approximation",
+      "axis": "visibility",
+      "time_hours": 12.0,
+      "fog_mode": "observed-only"
+    },
+    {
+      "id": "v04-fog-softened",
+      "label": "Softened two-band tactical shading",
+      "axis": "visibility",
+      "time_hours": 12.0,
+      "fog_mode": "softened"
+    },
+    {
+      "id": "m01-matte-terrain",
+      "label": "Fully matte terrain",
+      "axis": "materials",
+      "time_hours": 12.0,
+      "material_treatment": "matte-terrain"
+    },
+    {
+      "id": "m02-unified-matte",
+      "label": "Unified matte terrain and objects",
+      "axis": "materials",
+      "time_hours": 12.0,
+      "material_treatment": "unified-matte"
+    },
+    {
+      "id": "e01-micro-bevel-004",
+      "label": "Micro-bevel normals 0.04",
+      "axis": "edges",
+      "time_hours": 12.0,
+      "edge_treatment": "micro-bevel-004"
+    },
+    {
+      "id": "e02-micro-bevel-008",
+      "label": "Micro-bevel normals 0.08",
+      "axis": "edges",
+      "time_hours": 12.0,
+      "edge_treatment": "micro-bevel-008"
+    },
+    {
+      "id": "h01-flat-030",
+      "label": "Level height 0.30",
+      "axis": "level_height",
+      "time_hours": 12.0,
+      "level_height": 0.3
+    },
+    {
+      "id": "h02-tall-055",
+      "label": "Level height 0.55",
+      "axis": "level_height",
+      "time_hours": 12.0,
+      "level_height": 0.55
+    },
+    {
+      "id": "p01-muted-earth",
+      "label": "Muted earth world palette",
+      "axis": "palette",
+      "time_hours": 12.0,
+      "palette": "tools/visual_experiments/palettes/p01-muted-earth.json"
+    },
+    {
+      "id": "p02-high-separation",
+      "label": "Promoted high-separation baseline control",
+      "axis": "palette",
+      "time_hours": 12.0,
+      "palette": "tools/visual_experiments/palettes/p02-high-separation.json",
+      "baseline_alias": true
+    }
+  ]
+}

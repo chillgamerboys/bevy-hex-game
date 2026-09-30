@@ -284,7 +284,7 @@ impl ArenaSession {
             radius: c.golem_slam_range,
             age: 0.0,
             lifetime: 0.45,
-            kind: Spell::AreaBlast,
+            kind: crate::VisualEffectKind::RadialBurst,
         });
         self.combat_cue_from(owner.id, cast.team, center, CombatCueKind::Impact);
     }

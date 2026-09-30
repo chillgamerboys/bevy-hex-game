@@ -1803,13 +1803,16 @@ mod tests {
         assert!(matches!(lighting.profile, LightingProfile::Cycle(_)));
         assert_eq!(lighting.default_time_hours(), Some(12.0));
 
-        // The optional extras ship disabled; both are removed from the camera rather
-        // than applied at zero, so turning them on is the only way to change the look.
+        // The flat compatibility fields keep optional sky fill and haze disabled.
+        // Individual cycle anchors can opt into them; selected clear noon uses haze.
         assert!(
             lighting.sky_light_intensity.abs() < f32::EPSILON,
             "the sky light ships off"
         );
-        assert!(lighting.fog_density.abs() < f32::EPSILON, "haze ships off");
+        assert!(
+            lighting.fog_density.abs() < f32::EPSILON,
+            "the flat compatibility haze stays off"
+        );
     }
 
     #[test]
@@ -1860,7 +1863,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_noon_resolves_to_the_existing_flat_look() {
+    fn clear_noon_preserves_flat_geometry_with_selected_haze() {
         let lighting: LightingSettings =
             ron::from_str(LIGHTING_RON).expect("the shipped cycle should parse");
         let noon = lighting
@@ -1885,7 +1888,8 @@ mod tests {
         assert_approx_eq(noon.cloud_noise, lighting.cloud_noise);
         assert_eq!(noon.fog_color, lighting.fog_color);
         assert_eq!(noon.fog_sun_color, lighting.fog_sun_color);
-        assert_approx_eq(noon.fog_density, lighting.fog_density);
+        assert_approx_eq(noon.fog_density, 0.0003);
+        assert!(noon.fog_density > lighting.fog_density);
         assert_approx_eq(noon.exposure_ev100, 9.7);
         assert_approx_eq(noon.lower_glow_strength, 0.0);
 

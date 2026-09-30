@@ -1,0 +1,11 @@
+--- upstream/Cargo.toml
++++ vendor/aeronet_transport/Cargo.toml
+@@ -154,7 +154,7 @@
+ default-features = false
+ 
+ [dependencies.ringbuf]
+-version = "0.4.8"
++version = "0.5.2"
+ features = [
+     "alloc",
+     "portable-atomic",

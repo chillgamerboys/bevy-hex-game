@@ -4,6 +4,8 @@ from copy import deepcopy
 import io
 import math
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from arena import (GOLEM_VIEWS, WISP_VIEWS, WORM_VIEWS, WORM_OBSERVER_PRESETS,
@@ -34,7 +36,7 @@ def conversion_specimen(reset=False):
         "accepted_outcomes": 1, "rejected_outcomes": 0, "dirt": 2, "current_generation": 4+int(reset),
         "current_revision": 12+int(reset),
         "exposed_surface": None if reset else {"position": position, "top_center": [1, 2.2, 3], "camera": [1, 11.2, 3], "revision": 12, "frame": 20}, "restored_revision": 13 if reset else None,
-        "reset_key": {"key": "R", "frame": 19} if reset else None,
+        "reset_key": {"key": "Shift+R", "frame": 19} if reset else None,
         "conversion": {"actor": 0, "generation": 4, "sequence": 2, "frame": 15, "tick": 30, "revision": 12,
                        "changed": [{"position": position, "center": [1, 2, 3], "before": 3,
                                     "health_before": [2, 5], "health_after": [1, 2]}]},
@@ -44,6 +46,18 @@ def conversion_specimen(reset=False):
 
 
 class WormCaptureGuards(unittest.TestCase):
+    def test_northern_launch_keeps_both_packages_available_for_map_switching(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory).resolve()
+            with patch("arena.environment", return_value=({}, [])), patch("arena.run_cargo", return_value=0) as cargo:
+                result = main(["launch", "--map", "northern-archipelago", "--target-dir", str(package / "target"),
+                               "--forest-world", str(package), "--northern-world", str(package)])
+            self.assertEqual(result, 0)
+            env = cargo.call_args.args[0]
+            self.assertEqual(env["HEX_FOREST_WORLD"], str(package))
+            self.assertEqual(env["HEX_NORTHERN_WORLD"], str(package))
+            self.assertEqual(env["HEX_ARENA_MAP"], "northern-archipelago")
+
     def test_matrix_has_full_fort_two_body_angles_and_preserves_originals(self):
         self.assertEqual(len(WORM_VIEWS), 13)
         self.assertEqual(len({row[0] for row in WORM_VIEWS}), 13)

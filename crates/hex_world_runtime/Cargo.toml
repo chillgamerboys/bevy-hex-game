@@ -1,0 +1,15 @@
+[package]
+name = "hex_world_runtime"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Bounded asynchronous residency, exact queries, edits, and partition persistence for V4 worlds."
+
+[dependencies]
+atomicwrites = { workspace = true }
+hex_world_contracts = { path = "../hex_world_contracts" }
+ron = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true

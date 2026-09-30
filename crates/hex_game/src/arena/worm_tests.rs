@@ -485,7 +485,7 @@ fn worm_player_recipe_and_reset_return_to_ready_without_leaking_into_original_mo
         .iter()
         .any(|actor| actor.species == Species::Worm));
     tap_key(&mut fixture, KeyCode::Enter);
-    tap_key(&mut fixture, KeyCode::KeyR);
+    tap_restart(&mut fixture);
     assert!(!fixture.world().resource::<ViewState>().started);
     assert!(fixture.world().resource::<ViewState>().paused);
     assert_eq!(
@@ -552,7 +552,7 @@ fn worm_capture_observes_real_conversion_then_uses_r_to_restore_a_frozen_ready_r
     }
     assert!(
         reached,
-        "natural Worm conversion must reach the ordinary R-key reset receipt"
+        "natural Worm conversion must reach the ordinary Shift+R reset receipt"
     );
     let receipt = {
         let world = fixture.world();
@@ -571,7 +571,7 @@ fn worm_capture_observes_real_conversion_then_uses_r_to_restore_a_frozen_ready_r
         receipt
             .pointer("/reset_key/key")
             .and_then(serde_json::Value::as_str),
-        Some("R")
+        Some("Shift+R")
     );
     let changed = receipt
         .pointer("/conversion/changed")

@@ -23,6 +23,32 @@ pub(crate) struct TerrainDamageState {
 }
 
 impl TerrainDamageState {
+    #[cfg(feature = "arena-prototype")]
+    pub(crate) fn checkpoint_batches(&self) -> Vec<u64> {
+        self.consumed_batches.iter().map(|id| id.0).collect()
+    }
+    #[cfg(feature = "arena-prototype")]
+    pub(crate) fn restore_checkpoint_batches(&mut self, values: Vec<u64>) {
+        self.consumed_batches = values.into_iter().map(TerrainBatchId).collect();
+    }
+
+    #[cfg(feature = "arena-prototype")]
+    pub(crate) fn apply_burrow_health(
+        &mut self,
+        changes: &[hex_core::arena::ArenaBurrowChange],
+        damaged: &mut DamagedVoxels,
+    ) {
+        for change in changes {
+            if change.health_after.is_damaged() {
+                self.remaining
+                    .insert(change.position, change.health_after.remaining);
+                damaged.publish(change.position, change.health_after);
+            } else {
+                self.forget_voxel(change.position, damaged);
+            }
+        }
+    }
+
     /// Claims the first processed use of a batch id, including rejected batches.
     pub(crate) fn consume_batch(&mut self, batch: TerrainBatchId) -> bool {
         self.consumed_batches.insert(batch)
@@ -113,7 +139,55 @@ impl TerrainDamageState {
         substances: &SubstanceTable,
         damage_table: &TerrainDamageTable,
         damaged: &mut DamagedVoxels,
+        is_protected: impl FnMut(TilePos) -> bool,
+    ) -> AppliedTerrainImpact {
+        let result = self.resolve(
+            impact,
+            |pos| map.get(pos),
+            substances,
+            damage_table,
+            damaged,
+            is_protected,
+            false,
+        );
+        for position in &result.destroyed {
+            map.set(*position, hex_core::SubstanceId::AIR);
+        }
+        result
+    }
+
+    /// Resolve mixed finite-world solid occupancy without mutating its source.
+    /// The caller commits all returned removals in one world transaction.
+    #[cfg(feature = "arena-prototype")]
+    pub(crate) fn apply_finite(
+        &mut self,
+        impact: TerrainImpact,
+        material_at: impl FnMut(TilePos) -> hex_core::SubstanceId,
+        substances: &SubstanceTable,
+        damage_table: &TerrainDamageTable,
+        damaged: &mut DamagedVoxels,
+        is_protected: impl FnMut(TilePos) -> bool,
+    ) -> AppliedTerrainImpact {
+        self.resolve(
+            impact,
+            material_at,
+            substances,
+            damage_table,
+            damaged,
+            is_protected,
+            true,
+        )
+    }
+
+    fn resolve(
+        &mut self,
+        impact: TerrainImpact,
+        mut material_at: impl FnMut(TilePos) -> hex_core::SubstanceId,
+        substances: &SubstanceTable,
+        damage_table: &TerrainDamageTable,
+        damaged: &mut DamagedVoxels,
         mut is_protected: impl FnMut(TilePos) -> bool,
+        finite_solids: bool,
     ) -> AppliedTerrainImpact {
         let mut destroyed = Vec::new();
         let voxels = impact
@@ -121,7 +195,7 @@ impl TerrainDamageState {
             .iter()
             .copied()
             .map(|position| {
-                let substance = map.get(position);
+                let substance = material_at(position);
                 if substance.is_air() {
                     self.forget_voxel(position, damaged);
                     return TerrainVoxelOutcome {
@@ -134,22 +208,27 @@ impl TerrainDamageState {
                     };
                 }
 
-                let maximum = substances.toughness(substance);
+                let maximum = substances
+                    .toughness(substance)
+                    .or_else(|| (finite_solids && substances.is_solid(substance)).then_some(8));
                 let health_before = maximum.and_then(|maximum| {
                     let remaining = self.remaining.get(&position).copied().unwrap_or(maximum);
                     TerrainVoxelHealth::new(remaining.min(maximum), maximum)
                         .or_else(|| TerrainVoxelHealth::new(maximum, maximum))
                 });
-                let admitted = substances.is_diggable(substance)
-                    && maximum.is_some()
-                    && match impact.kind {
-                        hex_core::TerrainDamageKind::Elemental(element) => {
-                            damage_table.damages(element, substance)
+                let admitted = (if finite_solids {
+                    substances.is_solid(substance)
+                } else {
+                    substances.is_diggable(substance)
+                        && match impact.kind {
+                            hex_core::TerrainDamageKind::Elemental(element) => {
+                                damage_table.damages(element, substance)
+                            }
+                            hex_core::TerrainDamageKind::Physical => {
+                                damage_table.physical_damages(substance)
+                            }
                         }
-                        hex_core::TerrainDamageKind::Physical => {
-                            damage_table.physical_damages(substance)
-                        }
-                    }
+                }) && maximum.is_some()
                     && !is_protected(position);
 
                 if !admitted {
@@ -174,7 +253,6 @@ impl TerrainDamageState {
                     };
                 };
                 if impact.power >= health_before.remaining {
-                    map.set(position, hex_core::SubstanceId::AIR);
                     self.forget_voxel(position, damaged);
                     destroyed.push(position);
                     TerrainVoxelOutcome {

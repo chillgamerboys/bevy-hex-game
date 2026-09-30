@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hex_core::{HexCoord, Level, SpecialMovementRegion, TilePos, TraversalProfile};
 
+use crate::settings::MAX_SEAM_PORT_WIDTH;
+
 use super::layout::{LayoutKind, PatchId, ResolvedEdgeContract, ResolvedEdgeId};
 use super::patch::PatchRecipeContext;
 use super::traversal::OrdinaryGraph;
@@ -42,6 +44,7 @@ const fn seam_closure_region(kind: LayoutKind, edge: ResolvedEdgeId) -> SpecialM
         LayoutKind::Single | LayoutKind::Ring7 => LEGACY_SEAM_CLOSURE_REGION_BASE,
         LayoutKind::Ring19 => RING19_SEAM_CLOSURE_REGION_BASE,
         LayoutKind::Macro => MACRO_SEAM_CLOSURE_REGION_BASE,
+        LayoutKind::Schematic => MACRO_SEAM_CLOSURE_REGION_BASE,
     };
     SpecialMovementRegion(base.saturating_add(edge.0))
 }
@@ -124,7 +127,7 @@ pub(crate) fn shape_walker_seams(
 
     for edge in patch.shared_edges() {
         let ports = edge.walker_ports();
-        if !valid_two_wide_contract(
+        if !valid_walker_contract(
             edge.contract.walker.count,
             edge.contract.walker.width,
             &ports,
@@ -251,7 +254,7 @@ pub(crate) fn validate_patch_walker_seams(
 
     for edge in patch.shared_edges() {
         let ports = edge.walker_ports();
-        if !valid_two_wide_contract(
+        if !valid_walker_contract(
             edge.contract.walker.count,
             edge.contract.walker.width,
             &ports,
@@ -355,11 +358,15 @@ pub(crate) fn validate_world_walker_seams(
     plan: &GeneratedWorldPlan,
     issues: &mut Vec<WorldValidationIssue>,
 ) {
+    if plan.layout.shared_edges.is_empty() {
+        return;
+    }
+
     let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
     for (edge_id, edge) in &plan.layout.shared_edges {
-        if !valid_two_wide_contract(edge.walker.count, edge.walker.width, &edge.walker.ports) {
+        if !valid_walker_contract(edge.walker.count, edge.walker.width, &edge.walker.ports) {
             issues.push(seam_issue(format!(
-                "shared seam {edge_id:?} does not retain exact two-wide walker ports"
+                "shared seam {edge_id:?} does not retain its exact declared walker-port width"
             )));
             continue;
         }
@@ -419,7 +426,11 @@ pub(crate) fn validate_world_walker_seams(
                             .contains(&(*first_coord, *second_coord))
                             && first.level == edge.elevation.preferred
                             && second.level == edge.elevation.preferred;
-                        if !declared_exact {
+                        let declared_spanning =
+                            plan.features.protected_routes.values().any(|route| {
+                                route.surfaces.contains(first) && route.surfaces.contains(second)
+                            });
+                        if !declared_exact && !declared_spanning {
                             issues.push(seam_issue(format!(
                                 "shared seam {edge_id:?} admits undeclared crossing {first:?} -> {second:?}"
                             )));
@@ -520,18 +531,88 @@ fn seam_issue(detail: impl Into<String>) -> WorldValidationIssue {
     WorldValidationIssue::new(WorldIssueCode::Traversal, detail)
 }
 
-fn valid_two_wide_contract(count: u8, width: u32, ports: &[super::layout::ResolvedPort]) -> bool {
+fn valid_walker_contract(count: u8, width: u32, ports: &[super::layout::ResolvedPort]) -> bool {
     if count == 0 {
         return width == 0 && ports.is_empty();
     }
-    width == 2
+    (2..=MAX_SEAM_PORT_WIDTH).contains(&width)
         && usize::from(count) == ports.len()
-        && ports.iter().all(|port| port.lanes.len() == 2)
+        && ports
+            .iter()
+            .all(|port| port.lanes.len() == usize::try_from(width).unwrap_or(usize::MAX))
 }
 
 #[cfg(test)]
 mod tests {
+    use hex_core::{BiomeRegionId, MapViewHint};
+
     use super::*;
+    use crate::procedural_v3::layout::{
+        HexSide, ResolvedEdgeReference, ResolvedElevationBand, ResolvedLayoutPlan,
+        ResolvedLiquidPort, ResolvedPatch, ResolvedWalkerPorts,
+    };
+    use crate::procedural_v3::liquid::LiquidPlan;
+    use crate::procedural_v3::world::{FeaturePlan, InteriorPlan, StructurePlan};
+
+    fn empty_seam_world() -> GeneratedWorldPlan {
+        let coord = HexCoord::ORIGIN;
+        let footprint = BTreeSet::from([coord]);
+        let edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect();
+        GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
+            layout: ResolvedLayoutPlan {
+                kind: LayoutKind::Single,
+                grid_radius: 12,
+                footprint: footprint.clone(),
+                patches: BTreeMap::from([(
+                    PatchId(0),
+                    ResolvedPatch {
+                        biome_region: BiomeRegionId(0),
+                        rotation_turns: 0,
+                        mask: footprint.clone(),
+                        edges,
+                    },
+                )]),
+                shared_edges: BTreeMap::new(),
+                boundary_liquid_outlets: BTreeMap::new(),
+            },
+            volume: VolumePlan::new(footprint),
+            liquids: LiquidPlan::default(),
+            features: FeaturePlan::default(),
+            structures: StructurePlan::default(),
+            blockers: BTreeSet::new(),
+            lights: BTreeMap::new(),
+            biome_regions: BTreeMap::new(),
+            interiors: InteriorPlan::default(),
+            anchors: BTreeMap::new(),
+            observation_anchors: BTreeMap::new(),
+            view_hint: MapViewHint::new((1.0, 4.0, 2.0), (0.0, 0.0, 0.0)),
+        }
+    }
+
+    #[test]
+    fn walker_contract_accepts_exact_explicit_width_four_without_loosening_legacy_bounds() {
+        let lanes = [
+            (HexCoord::from_axial(0, 0), HexCoord::from_axial(1, 0)),
+            (HexCoord::from_axial(0, 1), HexCoord::from_axial(1, 1)),
+            (HexCoord::from_axial(0, 2), HexCoord::from_axial(1, 2)),
+            (HexCoord::from_axial(0, 3), HexCoord::from_axial(1, 3)),
+        ]
+        .into_iter()
+        .collect();
+        let port = super::super::layout::ResolvedPort {
+            lanes,
+            first_approach: BTreeSet::new(),
+            second_approach: BTreeSet::new(),
+        };
+        assert!(valid_walker_contract(1, 4, std::slice::from_ref(&port)));
+        assert!(!valid_walker_contract(1, 3, std::slice::from_ref(&port)));
+        assert!(!valid_walker_contract(1, 5, std::slice::from_ref(&port)));
+        assert!(valid_walker_contract(0, 0, &[]));
+    }
 
     #[test]
     fn seam_closure_regions_preserve_legacy_ids_and_fit_ring19_local_bits() {
@@ -550,5 +631,40 @@ mod tests {
         assert!(is_seam_closure_access(SurfaceAccess::SpecialMovement(
             ring19
         )));
+    }
+
+    #[test]
+    fn world_walker_validation_skips_only_an_empty_contract_set() {
+        let mut plan = empty_seam_world();
+        let mut issues = Vec::new();
+        validate_world_walker_seams(&plan, &mut issues);
+        assert!(issues.is_empty());
+
+        plan.layout.shared_edges.insert(
+            ResolvedEdgeId(0),
+            ResolvedEdgeContract {
+                first: (PatchId(0), HexSide::East),
+                second: (PatchId(0), HexSide::West),
+                elevation: ResolvedElevationBand {
+                    preferred: 0,
+                    min: 0,
+                    max: 0,
+                },
+                walker: ResolvedWalkerPorts {
+                    count: 1,
+                    width: 1,
+                    ports: Vec::new(),
+                },
+                liquid: ResolvedLiquidPort::Dry,
+                approach_depth: 1,
+                boundary_pairs: BTreeSet::new(),
+                protected_approaches: BTreeMap::new(),
+            },
+        );
+        validate_world_walker_seams(&plan, &mut issues);
+        assert_eq!(issues.len(), 1);
+        assert!(issues
+            .first()
+            .is_some_and(|issue| issue.detail.contains("exact declared walker-port width")));
     }
 }

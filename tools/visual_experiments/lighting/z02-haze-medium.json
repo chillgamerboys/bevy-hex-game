@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "candidate_id": "z02-haze-medium",
+  "base": "default-cycle",
+  "noon_overrides": {
+    "fog_color": [0.62, 0.72, 0.82],
+    "fog_sun_color": [1.0, 0.78, 0.50],
+    "fog_density": 0.0007
+  }
+}

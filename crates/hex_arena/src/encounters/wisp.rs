@@ -7,7 +7,7 @@ use bevy_math::Quat;
 use hex_core::TerrainDamageKind;
 
 /// An own-sighting copy; cover pressure never receives a live hidden body.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub(super) enum EmberTarget {
     Visible(Knowledge),
     Cover(Knowledge),

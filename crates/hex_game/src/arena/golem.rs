@@ -11,7 +11,7 @@ pub(super) struct GolemPrism;
 
 // Native circumradius-one pointy hex; same corner convention as HexCoord and
 // hex_map's arena terrain renderer. This is render geometry, never a collider.
-const CORNERS: [Vec3; 6] = [
+pub(super) const CORNERS: [Vec3; 6] = [
     Vec3::new(0.0, 0.0, 1.0),
     Vec3::new(0.866_025_4, 0.0, 0.5),
     Vec3::new(0.866_025_4, 0.0, -0.5),
@@ -417,7 +417,7 @@ pub(super) fn phase_actor<'a>(
                 || actor.attack_state().is_some_and(|attack| {
                     // Age>0 means the next ArenaTick has published the pulse's queued terrain edits.
                     session.effects.iter().any(|effect| {
-                        effect.kind == hex_arena::Spell::AreaBlast
+                        effect.kind == hex_arena::VisualEffectKind::RadialBurst
                             && effect.age > 0.0
                             && effect.age <= 0.10
                             && effect.center.distance(attack.origin) < 0.5

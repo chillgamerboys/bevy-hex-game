@@ -1,0 +1,1507 @@
+//! Northern map presentation consumes compact world facts and gameplay flight state.
+#[cfg(feature = "map-review")]
+mod shading_dolly;
+use super::{environment::UnderwaterTint, ArenaCamera, ArenaFrame, ViewState};
+use bevy::camera::ScalingMode;
+use bevy::core_pipeline::prepass::DepthPrepass;
+use bevy::prelude::*;
+use hex_arena::ArenaSession;
+use hex_core::arena::{
+    ArenaAvailability, ArenaMap, ArenaRenderStatus, ArenaReset, ArenaSelection,
+    ArenaStreamInterest, ArenaTerrainView, ArenaVoxelGeometry,
+};
+use hex_core::ocean::{OceanEnvironmentView, OceanSimulationTime, OceanWindProfile};
+use hex_core::HexCoord;
+use hex_map::arena::streamed::StreamedArena;
+use hex_map::ocean::{
+    sample_local_surface_at_time, sample_surface, OceanBathymetry, OceanBoundaryColumn, OceanFrame,
+    OceanNearBoundary, OceanRenderStatus, OceanSurfaceAdapter, OceanSurfaceProfile,
+};
+use hex_world::battle_sky::{BattleSkyFrame, BattleSkyProfile};
+use std::sync::Arc;
+
+#[derive(Clone, Copy)]
+struct CapturePose {
+    camera: Transform,
+    interest: Vec3,
+    overview_height: Option<f32>,
+    ground_pending: bool,
+}
+
+#[derive(Resource, Default)]
+pub(super) struct NorthernPresentation {
+    package: Option<u64>,
+    generation: Option<u64>,
+    boundary_center: Option<HexCoord>,
+    boundary_revision: Option<u64>,
+    capture: Option<CapturePose>,
+    capture_view: String,
+    enabled: bool,
+    boat_fixture_tick: Option<u64>,
+    adapter: Option<OceanSurfaceAdapter>,
+    wind_publication: Option<(u64, HexCoord)>,
+    summit_pending: Option<Vec3>,
+    summit_staged: bool,
+}
+
+#[derive(Component)]
+struct FlightCue;
+
+pub(super) fn install(app: &mut App) {
+    #[cfg(feature = "map-review")]
+    shading_dolly::install(app);
+    hex_map::ocean::install(app);
+    app.init_resource::<NorthernPresentation>()
+        .add_systems(Startup, spawn_cue)
+        .add_systems(
+            Update,
+            (configure, stage_summit, ocean_depth)
+                .chain()
+                .before(ArenaFrame::Input),
+        )
+        .add_systems(
+            Update,
+            interest.in_set(ArenaFrame::Input).after(super::input),
+        )
+        .add_systems(
+            Update,
+            (camera, present, cue)
+                .chain()
+                .in_set(ArenaFrame::Present)
+                .after(super::environment::present),
+        );
+}
+
+// Only ocean presentation needs opaque scene depth for underwater sight length.
+// Leaving Northern restores the existing Forest/Duel/Fort camera pipeline.
+fn ocean_depth(
+    mut commands: Commands,
+    selection: Res<ArenaSelection>,
+    cameras: Query<(Entity, Has<DepthPrepass>), With<ArenaCamera>>,
+) {
+    let enabled = matches!(
+        selection.map,
+        ArenaMap::NorthernArchipelago | ArenaMap::GrandV4
+    );
+    for (entity, present) in &cameras {
+        if enabled && !present {
+            commands.entity(entity).insert(DepthPrepass);
+        } else if !enabled && present {
+            commands.entity(entity).remove::<DepthPrepass>();
+        }
+    }
+}
+
+pub(super) fn sun_direction() -> Vec3 {
+    let elevation = 18.0_f32.to_radians();
+    let azimuth = 76.057_f32.to_radians();
+    Vec3::new(
+        azimuth.sin() * elevation.cos(),
+        elevation.sin(),
+        azimuth.cos() * elevation.cos(),
+    )
+}
+
+pub(super) fn controls_text() -> &'static str {
+    "M: minimap · V: wind direction/speed (arrow points downwind)\nF: open/fold exploration flight · WASD + mouse: steer · Space/Ctrl: rise/drop · Shift: fast flight\nB: deploy/fold sailboat near water · W: sail/paddle · A/D: steer · S: brake\nSwimming: Space rises, Ctrl dives · 90 seconds of oxygen\nG: momentum glider · Fireball and Shield work in flight · High Jump returns to gravity"
+}
+
+/// Grand's ordinary prevailing wind follows the authored outbound sailing route.
+/// Northern keeps its accepted easterly profile. Waves and controllers share this value.
+pub(super) fn prevailing_wind(streamed: &StreamedArena, selection: ArenaMap) -> OceanWindProfile {
+    let heading_radians = if selection == ArenaMap::GrandV4 {
+        streamed
+            .overview
+            .anchors
+            .get("sailing_start")
+            .zip(streamed.overview.anchors.get("volcano_landing"))
+            .map(|(start, end)| Vec3::from_array(*end) - Vec3::from_array(*start))
+            .filter(|direction| direction.with_y(0.0).length_squared() > 1.0)
+            .map_or(-std::f32::consts::FRAC_PI_2, |direction| {
+                direction.x.atan2(-direction.z)
+            })
+    } else {
+        std::f32::consts::FRAC_PI_2
+    };
+    OceanWindProfile {
+        heading_radians,
+        speed: 9.0,
+    }
+}
+
+pub(super) fn fixture_view(view: &str) -> bool {
+    (view.starts_with("grand-") && !super::grand_motion::is_view(view))
+        || matches!(
+            view,
+            "northern-overview"
+                | "northern-bay"
+                | "northern-bay-flat"
+                | "northern-settlement"
+                | "northern-summit"
+                | "northern-waterline"
+                | "northern-underwater"
+                | "northern-boat"
+        )
+}
+
+/// Static publication readiness, independent of native motion and control feel.
+pub(super) fn capture_ready(
+    view: &str,
+    presentation: &NorthernPresentation,
+    streamed: Option<&StreamedArena>,
+    terrain: Option<&ArenaRenderStatus>,
+    ocean: Option<&OceanRenderStatus>,
+) -> bool {
+    if presentation.summit_pending.is_some() {
+        return false;
+    }
+    if !fixture_view(view) {
+        return true;
+    }
+    if presentation.capture.is_none_or(|pose| pose.ground_pending) {
+        return false;
+    }
+    let Some(streamed) = streamed else {
+        return false;
+    };
+    let counts = streamed.runtime.counts();
+    streamed.failure.is_none()
+        && counts.resident_chunks > 0
+        && counts.in_flight_jobs == 0
+        && counts.queued_chunks == 0
+        && terrain.is_some_and(|status| status.pending_chunks == 0)
+        && ocean.is_some_and(|status| {
+            status.ready
+                && status.error.is_none()
+                && status.bathymetry_revision == Some(streamed.overview.package_fingerprint)
+        })
+}
+
+/// Capture receipts describe admitted world facts; they do not claim motion performance.
+pub(super) fn snapshot(
+    streamed: Option<&StreamedArena>,
+    terrain: Option<&ArenaRenderStatus>,
+    ocean: Option<&OceanRenderStatus>,
+    frame: &OceanFrame,
+    profile: &OceanSurfaceProfile,
+) -> serde_json::Value {
+    let Some(world) = streamed else {
+        return serde_json::Value::Null;
+    };
+    let counts = world.runtime.counts();
+    serde_json::json!({
+        "world_id": world.overview.world_id,
+        "source_fingerprint": world.overview.source_fingerprint,
+        "package_fingerprint": world.overview.package_fingerprint,
+        "islands": world.overview.islands.len(),
+        "trees": world.overview.tree_count,
+        "buildings": world.overview.building_count,
+        "sea_level": world.overview.sea_level,
+        "resident_chunks": counts.resident_chunks,
+        "peak_resident_chunks": world.peak_resident,
+        "queued_chunks": counts.queued_chunks,
+        "in_flight_jobs": counts.in_flight_jobs,
+        "source_chunks_retained": world.edits.resident_source_count(),
+        "last_publication_ms": world.publication_ms,
+        "failure": world.failure,
+        "surface_time_seconds": frame.time().seconds,
+        "wind_response": profile.wind_response.map(|wind| serde_json::json!({
+            "heading_radians": wind.heading_radians, "speed": wind.speed,
+        })),
+        "terrain_pending": terrain.map(|value| value.pending_chunks),
+        "ocean": ocean.map(|value| serde_json::json!({
+            "ready": value.ready,
+            "surface_vertices": value.surface_vertices,
+            "boundary_vertices": value.boundary_vertices,
+            "bathymetry_revision": value.bathymetry_revision,
+            "error": value.error,
+            "phase_seconds": value.phase_seconds,
+        })),
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Atomic map presentation setup joins immutable publication with four presentation resources."
+)]
+pub(super) fn configure(
+    mut commands: Commands,
+    environment: Option<Res<OceanEnvironmentView>>,
+    selection: Res<ArenaSelection>,
+    reset: Res<ArenaReset>,
+    state: Res<ViewState>,
+    session: Res<ArenaSession>,
+    streamed: Option<Res<StreamedArena>>,
+    terrain: Res<ArenaTerrainView>,
+    geometry: Res<ArenaVoxelGeometry>,
+    mut cache: ResMut<NorthernPresentation>,
+    mut bath: ResMut<OceanBathymetry>,
+    mut profile: ResMut<OceanSurfaceProfile>,
+    mut sky_profile: ResMut<BattleSkyProfile>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let enabled = matches!(
+        selection.map,
+        ArenaMap::NorthernArchipelago | ArenaMap::GrandV4
+    );
+    if enabled != cache.enabled {
+        *sky_profile = if enabled {
+            BattleSkyProfile::northern()
+        } else {
+            BattleSkyProfile::default()
+        };
+        cache.enabled = enabled;
+    }
+    if !enabled {
+        if environment.is_some() && selection.map != ArenaMap::WaterLab {
+            commands.remove_resource::<OceanEnvironmentView>();
+        }
+        cache.capture = None;
+        cache.summit_pending = None;
+        cache.summit_staged = false;
+        return;
+    }
+    let Some(streamed) = streamed else {
+        return;
+    };
+    let map = &streamed.overview;
+    let wind = prevailing_wind(&streamed, selection.map);
+    if cache.package != Some(map.package_fingerprint) {
+        let prepared = OceanBathymetry {
+            revision: map.package_fingerprint,
+            origin_xz: Vec2::from_array(map.origin_xz),
+            spacing: map.spacing,
+            width: map.width,
+            height: map.height,
+            bed_heights: map.bed_heights.clone(),
+            ..default()
+        }
+        .with_shore_shelter(map.sea_level, 80.0);
+        match prepared {
+            Ok(prepared) => *bath = prepared,
+            Err(error) => {
+                error!("Northern shoreline presentation: {error}");
+                exit.write(AppExit::error());
+                return;
+            }
+        }
+        *profile = OceanSurfaceProfile::regular_voxels(map.sea_level, geometry.level_height);
+        if selection.map == ArenaMap::GrandV4 && state.capture_view != "grand-bay-baseline" {
+            *profile = profile.clone().with_wind_response(wind);
+        }
+        // Capture-only baseline retains identical water membership and opaque color.
+        if state.capture.is_some() && state.capture_view == "northern-bay-flat" {
+            for wave in &mut profile.waves {
+                wave.amplitude = 0.0;
+            }
+        }
+        match OceanSurfaceAdapter::new(profile.clone(), bath.clone()) {
+            Ok(adapter) => cache.adapter = Some(adapter),
+            Err(error) => {
+                error!("Northern ocean environment: {error}");
+                exit.write(AppExit::error());
+                return;
+            }
+        }
+        cache.wind_publication = None;
+        cache.package = Some(map.package_fingerprint);
+        cache.boundary_center = None;
+        cache.capture = None;
+    }
+    let center = cache
+        .summit_pending
+        .or_else(|| session.stream_interest().map(|interest| interest.position))
+        .unwrap_or(Vec3::ZERO);
+    let center = HexCoord::from_world((center / 16.0).round() * 16.0);
+    let publication = (terrain.revision, center);
+    if cache.wind_publication != Some(publication)
+        || environment
+            .as_ref()
+            .is_none_or(|env| env.package_fingerprint != map.package_fingerprint)
+    {
+        if let Some(adapter) = &cache.adapter {
+            let field = hex_map::water_lab::WindField::for_region(
+                &terrain,
+                *geometry,
+                map.sea_level,
+                Some(center.to_world(0.0)),
+            );
+            commands.insert_resource(OceanEnvironmentView {
+                package_fingerprint: map.package_fingerprint,
+                sampler: Arc::new(adapter.clone().with_wind_field(field)),
+                wind,
+            });
+            cache.wind_publication = Some(publication);
+        }
+    }
+    if cache.generation != Some(reset.generation) {
+        cache.generation = Some(reset.generation);
+        cache.summit_staged = false;
+        cache.boundary_center = None;
+    }
+    if !cache.summit_staged
+        && cache.summit_pending.is_none()
+        && std::env::var("HEX_NORTHERN_START").as_deref() == Ok("summit-glider")
+    {
+        cache.summit_pending = capture_pose(
+            "northern-summit",
+            &session,
+            &streamed,
+            &profile,
+            &bath,
+            &terrain,
+            *geometry,
+        )
+        .map(|pose| pose.interest);
+    }
+    if state.capture.is_some() && fixture_view(&state.capture_view) {
+        if cache.capture.is_none_or(|pose| pose.ground_pending)
+            || cache.capture_view != state.capture_view
+        {
+            cache.capture = capture_pose(
+                &state.capture_view,
+                &session,
+                &streamed,
+                &profile,
+                &bath,
+                &terrain,
+                *geometry,
+            );
+            cache.capture_view.clone_from(&state.capture_view);
+        }
+    } else {
+        cache.capture = None;
+    }
+}
+
+fn stage_summit(
+    mut cache: ResMut<NorthernPresentation>,
+    mut session: ResMut<ArenaSession>,
+    terrain: Res<ArenaTerrainView>,
+    geometry: Res<ArenaVoxelGeometry>,
+    mut state: ResMut<ViewState>,
+) {
+    let Some(site) = cache.summit_pending else {
+        return;
+    };
+    let coord = HexCoord::from_world(site);
+    // Wait for the entire summit neighborhood, then refine the coarse overview
+    // peak against published solid columns instead of spawning on a proxy mesh.
+    if coord.within_radius(8).into_iter().any(|coord| {
+        terrain
+            .residency
+            .as_ref()
+            .is_none_or(|residency| residency.at(coord, *geometry) != ArenaAvailability::Ready)
+    }) {
+        return;
+    }
+    let Some(peak) = coord
+        .within_radius(8)
+        .into_iter()
+        .filter_map(|coord| terrain.columns.get(&coord))
+        .flatten()
+        .map(|span| hex_core::TilePos::new(span.bottom.coord, span.top_level))
+        .max_by(|a, b| geometry.top(*a).total_cmp(&geometry.top(*b)))
+    else {
+        return;
+    };
+    let feet = peak.coord.to_world(geometry.top(peak) + 5.0);
+    let heading = terrain
+        .anchors
+        .get("party_start")
+        .copied()
+        .unwrap_or(Vec3::ZERO)
+        - feet;
+    if !session.start_exploration_glide(feet, heading, &terrain, *geometry) {
+        return;
+    }
+    let heading = heading.with_y(0.0).normalize_or(Vec3::X);
+    state.yaw = (-heading.x).atan2(-heading.z);
+    state.pitch = -0.15;
+    state.third_person = true;
+    state.initialized = true;
+    cache.summit_pending = None;
+    cache.summit_staged = true;
+    info!(
+        "Ocean summit glider staged: feet={feet:?}, heading={heading:?}, open=true, wind=natural-field"
+    );
+}
+
+pub(super) fn interest(
+    session: Res<ArenaSession>,
+    selection: Res<ArenaSelection>,
+    cache: Option<Res<NorthernPresentation>>,
+    motion: Option<Res<super::grand_motion::Run>>,
+    mut target: ResMut<ArenaStreamInterest>,
+) {
+    if !selection.map.capabilities().streamed {
+        return;
+    }
+    if let Some(position) = motion.as_ref().and_then(|motion| motion.loading_interest()) {
+        *target = ArenaStreamInterest {
+            position,
+            velocity: Vec3::ZERO,
+        };
+    } else if let Some(position) = cache.as_ref().and_then(|cache| cache.summit_pending) {
+        *target = ArenaStreamInterest {
+            position,
+            velocity: Vec3::ZERO,
+        };
+    } else if let Some(capture) = cache.as_ref().and_then(|cache| cache.capture) {
+        // An explicitly windowless composition camera requests fine terrain at
+        // its subject, never fabricating movement or discoveries for the actor.
+        *target = ArenaStreamInterest {
+            position: capture.interest,
+            velocity: Vec3::ZERO,
+        };
+    } else if let Some(interest) = session.stream_interest() {
+        *target = interest;
+    }
+}
+
+fn camera(
+    cache: Res<NorthernPresentation>,
+    mut cameras: Query<(&mut Transform, &mut Projection), With<ArenaCamera>>,
+) {
+    if let Some(capture) = cache.capture {
+        if let Ok((mut camera, mut projection)) = cameras.single_mut() {
+            *camera = capture.camera;
+            if let Some(height) = capture.overview_height {
+                if !matches!(&*projection, Projection::Orthographic(_)) {
+                    *projection = Projection::Orthographic(OrthographicProjection {
+                        scaling_mode: ScalingMode::FixedVertical {
+                            viewport_height: height,
+                        },
+                        near: 0.035,
+                        far: 24_000.0,
+                        ..OrthographicProjection::default_3d()
+                    });
+                }
+            } else if matches!(&*projection, Projection::Orthographic(_)) {
+                *projection = Projection::Perspective(PerspectiveProjection {
+                    fov: 75.0_f32.to_radians(),
+                    near: 0.035,
+                    far: 24_000.0,
+                    ..default()
+                });
+            }
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Camera presentation joins exact local water, the visual ocean, sky and HUD-safe tint."
+)]
+fn present(
+    time: Res<OceanSimulationTime>,
+    state: Res<ViewState>,
+    view: Res<ArenaTerrainView>,
+    geometry: Res<ArenaVoxelGeometry>,
+    session: Res<ArenaSession>,
+    mut cache: ResMut<NorthernPresentation>,
+    mut sky: ResMut<BattleSkyFrame>,
+    profile: Res<OceanSurfaceProfile>,
+    bath: Res<OceanBathymetry>,
+    mut frame: ResMut<OceanFrame>,
+    mut boundary: ResMut<OceanNearBoundary>,
+    mut cameras: Query<(&Transform, &mut DistanceFog), With<ArenaCamera>>,
+    mut overlays: Query<(&mut Node, &mut BackgroundColor), With<UnderwaterTint>>,
+) {
+    frame.enabled = cache.enabled && cache.package.is_some();
+    if !frame.enabled {
+        return;
+    }
+    // Explicit frozen phase zero matches the existing arena capture contract.
+    let freeze = state.capture.is_some()
+        && state.capture_view != "northern-boat"
+        && !super::grand_motion::is_view(&state.capture_view);
+    frame.phase_seconds = if freeze { 0.0 } else { time.phase_seconds() };
+    frame.simulation_time = Some(if freeze {
+        OceanSimulationTime {
+            generation: time.generation,
+            seconds: 0.0,
+        }
+    } else {
+        *time
+    });
+    sky.enabled = true;
+    sky.sun_direction = sun_direction();
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Cloud translation uses the same elapsed run time; f32 precision is ample for its slow drift."
+    )]
+    let cloud_seconds = time.seconds as f32;
+    sky.cloud_phase = if state.capture.is_some() {
+        0.0
+    } else {
+        cloud_seconds
+    };
+    let mut water = None;
+    if let Ok((camera, mut fog)) = cameras.single_mut() {
+        frame.camera_position = camera.translation;
+        sky.center = camera.translation;
+        publish_boundary(
+            &view,
+            *geometry,
+            camera.translation,
+            &mut cache,
+            &mut boundary,
+        );
+        water = camera_water(
+            &view,
+            *geometry,
+            &profile,
+            &bath,
+            &boundary,
+            camera.translation,
+            frame.time(),
+        )
+        .or_else(|| {
+            super::environment::water_color(&view, *geometry, camera.translation, &session)
+        });
+        fog.color = water.unwrap_or(Color::srgb(0.46, 0.59, 0.73));
+        fog.falloff = FogFalloff::Exponential {
+            density: if water.is_some() { 0.09 } else { 0.00016 },
+        };
+        fog.directional_light_color = if water.is_some() {
+            Color::NONE
+        } else {
+            Color::srgb(1.0, 0.76, 0.48)
+        };
+    }
+    sky.underwater_color = water.map(|color| {
+        let color = color.to_linear();
+        Vec3::new(color.red, color.green, color.blue)
+    });
+    for (mut node, mut background) in &mut overlays {
+        super::ux::set_display(
+            &mut node,
+            if water.is_some() {
+                Display::Flex
+            } else {
+                Display::None
+            },
+        );
+        background.set_if_neq(BackgroundColor(
+            water.map_or(Color::NONE, |color| color.with_alpha(0.20)),
+        ));
+    }
+}
+
+fn camera_water(
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    profile: &OceanSurfaceProfile,
+    bath: &OceanBathymetry,
+    boundary: &OceanNearBoundary,
+    camera: Vec3,
+    time: OceanSimulationTime,
+) -> Option<Color> {
+    let sample =
+        sample_local_surface_at_time(profile, bath, boundary, Vec2::new(camera.x, camera.z), time)?;
+    if camera.y >= sample.height {
+        return None;
+    }
+    let coord = HexCoord::from_world(camera);
+    let first = view
+        .liquids
+        .partition_point(|span| span.bottom.coord < coord);
+    let in_volume = view
+        .liquids
+        .iter()
+        .skip(first)
+        .take_while(|span| span.bottom.coord == coord)
+        .any(|span| {
+            let top = geometry.top(hex_core::TilePos::new(coord, span.top_level));
+            camera.y >= geometry.top(span.bottom) - geometry.level_height
+                && (top - profile.mean_sea_level).abs() < 0.01
+        });
+    in_volume.then_some(Color::linear_rgb(
+        sample.color.x,
+        sample.color.y,
+        sample.color.z,
+    ))
+}
+
+fn publish_boundary(
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    camera: Vec3,
+    cache: &mut NorthernPresentation,
+    boundary: &mut OceanNearBoundary,
+) {
+    let at = HexCoord::from_world(camera);
+    // Moving the bounded window every eight columns avoids a mesh rebuild on
+    // each camera nudge while keeping at least twenty units around the eye.
+    let center = HexCoord::from_axial(at.x().div_euclid(8) * 8 + 4, at.y().div_euclid(8) * 8 + 4);
+    let center_world = center.to_world(0.0);
+    let moved = cache.boundary_center != Some(center);
+    let revised = cache.boundary_revision != Some(view.revision);
+    if !moved && !revised {
+        return;
+    }
+    let local_change = view.full_rebuild
+        || view
+            .dirty_columns
+            .iter()
+            .any(|coord| coord.to_world(0.0).distance_squared(center_world) < 36.0 * 36.0);
+    cache.boundary_revision = Some(view.revision);
+    if !moved && !local_change {
+        return;
+    }
+    cache.boundary_center = Some(center);
+    boundary.columns.clear();
+    boundary.known_columns.clear();
+    for coord in center.within_radius(24) {
+        let distance = coord.to_world(0.0).distance_squared(center_world);
+        if distance > 34.0 * 34.0
+            || view
+                .residency
+                .as_ref()
+                .is_none_or(|r| r.at(coord, geometry) != ArenaAvailability::Ready)
+        {
+            continue;
+        }
+        // Include a liquid halo beyond known boundary columns: otherwise a
+        // clipped-but-known wet neighbor would invent a vertical ocean wall.
+        if distance <= 32.0 * 32.0 {
+            boundary.known_columns.insert(coord);
+        }
+        let first = view
+            .liquids
+            .partition_point(|span| span.bottom.coord < coord);
+        for span in view
+            .liquids
+            .iter()
+            .skip(first)
+            .take_while(|span| span.bottom.coord == coord)
+        {
+            boundary.columns.push(OceanBoundaryColumn {
+                coordinate: coord,
+                bottom: geometry.top(span.bottom) - geometry.level_height,
+                top: geometry.top(hex_core::TilePos::new(coord, span.top_level)),
+            });
+        }
+    }
+    boundary.revision = boundary.revision.wrapping_add(1);
+}
+
+fn spawn_cue(mut commands: Commands) {
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(22),
+            bottom: px(152),
+            display: Display::None,
+            padding: UiRect::all(px(7)),
+            ..default()
+        },
+        super::hud::text("", 22.0, Color::srgb(0.86, 0.94, 1.0)),
+        BackgroundColor(Color::srgba(0.025, 0.05, 0.08, 0.85)),
+        GlobalZIndex(10),
+        Pickable::IGNORE,
+        FlightCue,
+    ));
+}
+fn cue(
+    state: Res<ViewState>,
+    session: Res<ArenaSession>,
+    mut labels: Query<(&mut Node, &mut Text), With<FlightCue>>,
+) {
+    let flight = session
+        .actors
+        .iter()
+        .find(|a| Some(a.id) == session.human_actor_id())
+        .and_then(|a| a.free_flight());
+    let label = if state.started && !state.paused && state.capture.is_none() {
+        flight.map_or_else(String::new, |f| {
+            if f.loading {
+                "Loading nearby terrain…".into()
+            } else if f.active {
+                format!("FLIGHT · {:.0} u/s · F to fold", f.velocity.length())
+            } else {
+                String::new()
+            }
+        })
+    } else {
+        String::new()
+    };
+    for (mut node, mut text) in &mut labels {
+        super::ux::set_display(
+            &mut node,
+            if label.is_empty() {
+                Display::None
+            } else {
+                Display::Flex
+            },
+        );
+        if text.0 != label {
+            text.0.clone_from(&label);
+        }
+    }
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "The bounded overview sample grid is at most 2048 by 2048."
+)]
+fn capture_pose(
+    view: &str,
+    session: &ArenaSession,
+    streamed: &StreamedArena,
+    profile: &OceanSurfaceProfile,
+    bath: &OceanBathymetry,
+    terrain: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+) -> Option<CapturePose> {
+    let map = &streamed.overview;
+    let spawn = Vec3::from_array(map.player_spawn);
+    if let Some(authored) = map.review_cameras.get(view) {
+        let position = Vec3::from_array(authored.eye);
+        let target = Vec3::from_array(authored.target);
+        if authored.ground {
+            let human = session.human_actor_id()?;
+            let actor = session.actors.iter().find(|actor| actor.id == human)?;
+            let mut pose = ground_capture_pose(
+                terrain,
+                geometry,
+                position,
+                target,
+                map.sea_level,
+                GroundCaptureProfile {
+                    eye: actor.eye().y - actor.feet.y,
+                    height: actor.body_dimensions().y,
+                    radius: actor.body_dimensions().x * 0.5,
+                    // Authored heights identify a storey. Permit a local
+                    // terrain adjustment within the horizontal search radius,
+                    // but never silently substitute a distant cave roof.
+                    maximum_height_shift: Some(HexCoord::from_axial(6, 0).to_world(0.0).length()),
+                },
+            );
+            // Ground admission moves the eye onto real, loaded support. Keep the
+            // authored upward/downward sightline so enclosure views still test
+            // the intended mountain skyline instead of flattening their pitch.
+            pose.camera = authored_ground_direction(pose.camera.translation, position, target);
+            return Some(pose);
+        }
+        return Some(CapturePose {
+            camera: Transform::from_translation(position).looking_at(target, Vec3::Y),
+            interest: Vec3::from_array(authored.interest),
+            overview_height: authored.orthographic_span,
+            ground_pending: false,
+        });
+    }
+    if matches!(view, "northern-overview" | "grand-overview") {
+        return Some(overview_pose(
+            Vec2::from_array(map.origin_xz),
+            Vec2::new(
+                map.width.saturating_sub(1) as f32,
+                map.height.saturating_sub(1) as f32,
+            ) * map.spacing,
+            map.sea_level,
+            map.bed_heights
+                .iter()
+                .copied()
+                .fold(map.sea_level, f32::max),
+            spawn,
+        ));
+    }
+    let anchor = |name: &str| map.anchors.get(name).copied().map(Vec3::from_array);
+    let mainland_direction = match view {
+        "grand-mainland-south" => Some(Vec3::new(0.0, 1.35, 1.0)),
+        "grand-mainland-east" => Some(Vec3::new(1.0, 1.35, 0.35)),
+        "grand-mainland-northwest" => Some(Vec3::new(-1.0, 1.35, -1.0)),
+        _ => None,
+    };
+    if let Some(direction) = mainland_direction {
+        // The measured mainland spans x ±871.23, z ±784.5. Include its
+        // complete coastline, with room for voxel edges and tall landmarks.
+        // These are mainland proportion views; the offshore volcano is outside.
+        return Some(overview_pose_from(
+            Vec2::new(-880.0, -795.0),
+            Vec2::new(1760.0, 1590.0),
+            map.sea_level,
+            map.bed_heights
+                .iter()
+                .copied()
+                .fold(map.sea_level, f32::max)
+                + 80.0,
+            anchor("forest")?,
+            direction,
+        ));
+    }
+    let bay = anchor("bay")?.with_y(map.sea_level);
+    if matches!(view, "grand-waterline" | "grand-underwater") {
+        let offshore = bay + Vec3::new(-65.0, 0.0, 80.0);
+        let site = waterline_site(terrain, geometry, bay, offshore, map.sea_level)?;
+        let surface = sample_surface(profile, bath, Vec2::new(site.x, site.z), 0.0)
+            .map_or(map.sea_level, |sample| sample.height);
+        let height = if view == "grand-underwater" {
+            -1.2
+        } else {
+            0.7
+        };
+        return Some(CapturePose {
+            camera: Transform::from_translation(site.with_y(surface + height))
+                .looking_at(bay.with_y(map.sea_level + 1.0), Vec3::Y),
+            interest: site,
+            overview_height: None,
+            ground_pending: false,
+        });
+    }
+    if view == "grand-mainland" {
+        return Some(overview_pose(
+            Vec2::new(-950.0, -850.0),
+            Vec2::new(1900.0, 1700.0),
+            map.sea_level,
+            560.0,
+            anchor("forest")?,
+        ));
+    }
+    let ground_site = match view {
+        "grand-garden-ground" => Some((
+            Vec3::new(276.0, anchor("garden")?.y, -464.0),
+            anchor("garden")?,
+        )),
+        "grand-forest-ground" => Some((
+            Vec3::new(-240.0, anchor("forest")?.y, 220.0),
+            Vec3::new(-160.0, anchor("forest")?.y, 220.0),
+        )),
+        "grand-forest-ground-reverse" => Some((
+            Vec3::new(-162.0, anchor("forest")?.y, 219.0),
+            Vec3::new(-240.0, anchor("forest")?.y, 220.0),
+        )),
+        "grand-island-landing" => Some((anchor("volcano_landing")?, anchor("volcano")?)),
+        "grand-river-exit" => Some((
+            Vec3::new(-73.0, map.sea_level, 270.0),
+            Vec3::new(-230.0, map.sea_level, 270.0),
+        )),
+        _ => None,
+    };
+    if let Some((desired, toward)) = ground_site {
+        let human = session.human_actor_id()?;
+        let actor = session.actors.iter().find(|actor| actor.id == human)?;
+        return Some(ground_capture_pose(
+            terrain,
+            geometry,
+            desired,
+            toward,
+            map.sea_level,
+            GroundCaptureProfile {
+                eye: actor.eye().y - actor.feet.y,
+                height: actor.body_dimensions().y,
+                radius: actor.body_dimensions().x * 0.5,
+                maximum_height_shift: None,
+            },
+        ));
+    }
+    if let Some(name) = view.strip_prefix("grand-") {
+        let (site_name, offset) = match name {
+            "garden" => ("garden", Vec3::new(38.0, 26.0, 45.0)),
+            "waterfall" => ("waterfall", Vec3::new(-35.0, 22.0, 48.0)),
+            "valley-lake" => ("valley_lake", Vec3::new(60.0, 40.0, 70.0)),
+            "world-tree" => ("world_tree", Vec3::new(-205.0, 95.0, 270.0)),
+            "roots-entrance" => ("root_temple_approach", Vec3::new(-12.0, 5.0, -10.0)),
+            "shrine-plant" => ("shrine_plant", Vec3::new(5.0, 2.0, 7.0)),
+            "shrine-earth" => ("shrine_earth", Vec3::new(8.0, 3.0, 10.0)),
+            "shrine-fire" => ("shrine_fire", Vec3::new(8.0, 3.0, 10.0)),
+            "shrine-air" => ("shrine_air", Vec3::new(8.0, 3.0, 10.0)),
+            "forest" => ("forest", Vec3::new(45.0, 30.0, 60.0)),
+            "summit" => ("shrine_air", Vec3::new(72.0, 50.0, 92.0)),
+            "crystal" => ("crystal_ascent", Vec3::new(-85.0, 65.0, 100.0)),
+            "frozen-woods" => ("frozen_woods", Vec3::new(45.0, 130.0, 55.0)),
+            "volcano" => ("volcano", Vec3::new(125.0, 95.0, 155.0)),
+            "bay" | "bay-baseline" => ("bay", Vec3::new(-18.0, 8.0, 24.0)),
+            "bay-reverse" => ("bay", Vec3::new(24.0, 8.0, -18.0)),
+            "library" => ("library_hall", Vec3::new(-5.0, 2.2, 6.0)),
+            "library-reverse" => ("library_hall", Vec3::new(30.0, 1.05, -25.0)),
+            "library-upper" => ("library_upper", Vec3::new(-22.0, 2.4, 6.0)),
+            "waterfall-cave" => ("library_entrance", Vec3::new(-4.0, 2.0, 0.0)),
+            "shadow-tunnel" => ("shadow_entrance", Vec3::new(0.0, 2.0, 3.0)),
+            "shadow-reverse" => ("shadow_tunnel", Vec3::new(0.0, 2.0, -80.0)),
+            "shadow-exit" => ("shadow_exit", Vec3::new(0.0, 4.0, -8.0)),
+            _ => return None,
+        };
+        let site = anchor(site_name)?;
+        let target = match name {
+            "shadow-tunnel" => anchor("shadow_tunnel")? + Vec3::Y * 1.7,
+            "shadow-reverse" => anchor("shadow_entrance")? + Vec3::Y * 1.7,
+            "shadow-exit" => site + Vec3::new(0.0, 1.7, 24.0),
+            "world-tree" => site + Vec3::Y * 55.0,
+            "roots-entrance" => anchor("root_temple_entrance")? + Vec3::Y * 2.0,
+            "shrine-plant" => site + Vec3::new(0.0, 1.8, -4.5),
+            "shrine-earth" | "shrine-fire" | "shrine-air" => site + Vec3::new(0.0, 2.0, -3.0),
+            "library-upper" => site + Vec3::new(9.0, 4.0, -9.0),
+            "library-reverse" => site + Vec3::new(-15.0, 5.0, 26.0),
+            "waterfall-cave" => anchor("waterfall")? + Vec3::Y * 4.5,
+            _ => site + Vec3::Y * 1.4,
+        };
+        return Some(CapturePose {
+            camera: Transform::from_translation(site + offset).looking_at(target, Vec3::Y),
+            interest: if name == "roots-entrance" {
+                anchor("root_temple_entrance")?
+            } else if name == "shadow-reverse" {
+                site + offset
+            } else {
+                site
+            },
+            overview_height: None,
+            ground_pending: false,
+        });
+    }
+    let (position, target, interest) = match view {
+        "northern-boat" => {
+            let actor = session
+                .human_actor_id()
+                .and_then(|id| session.actors.iter().find(|actor| actor.id == id))?;
+            let boat = actor.boat().filter(|boat| boat.active)?;
+            let side = boat.heading.cross(Vec3::Y);
+            (
+                actor.feet - boat.heading * 5.5 - side * 4.0 + Vec3::Y * 3.0,
+                actor.feet + Vec3::Y * 0.8,
+                actor.feet,
+            )
+        }
+        "northern-bay" | "northern-bay-flat" => (spawn + Vec3::Y * 6.0, bay + Vec3::Y * 5.0, spawn),
+        "northern-settlement" => {
+            let site = anchor("settlement")?;
+            (
+                site + Vec3::new(-65.0, 42.0, 75.0),
+                site + Vec3::Y * 4.0,
+                site,
+            )
+        }
+        "northern-summit" => {
+            let (index, height) = map
+                .bed_heights
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))?;
+            let width = usize::try_from(map.width).ok()?;
+            if width == 0 {
+                return None;
+            }
+            let site = Vec3::new(
+                map.origin_xz.first().copied()? + (index % width) as f32 * map.spacing,
+                *height,
+                map.origin_xz.get(1).copied()? + (index / width) as f32 * map.spacing,
+            );
+            (site + Vec3::new(70.0, 52.0, 90.0), site, site)
+        }
+        "northern-waterline" | "northern-underwater" => {
+            let site = waterline_site(terrain, geometry, spawn, bay, map.sea_level)?;
+            let surface = sample_surface(profile, bath, Vec2::new(site.x, site.z), 0.0)
+                .map_or(map.sea_level, |sample| sample.height);
+            let eye = site.with_y(
+                surface
+                    + if view == "northern-underwater" {
+                        -1.2
+                    } else {
+                        0.7
+                    },
+            );
+            (eye, bay.with_y(map.sea_level + 1.0), site)
+        }
+        _ => return None,
+    };
+    Some(CapturePose {
+        camera: Transform::from_translation(position).looking_at(target, Vec3::Y),
+        interest,
+        overview_height: None,
+        ground_pending: false,
+    })
+}
+
+/// Review-only eye height follows admitted terrain rather than a coarse overview
+/// or a landmark's distant elevation. Pending interest loads the exact ground;
+/// neither this camera nor its bounded clearance search relocates the player.
+#[derive(Clone, Copy)]
+struct GroundCaptureProfile {
+    eye: f32,
+    height: f32,
+    radius: f32,
+    maximum_height_shift: Option<f32>,
+}
+
+fn authored_ground_direction(position: Vec3, original_eye: Vec3, target: Vec3) -> Transform {
+    let direction = (target - original_eye).normalize_or(Vec3::NEG_Z);
+    Transform::from_translation(position).looking_at(position + direction * 30.0, Vec3::Y)
+}
+
+fn ground_capture_pose(
+    terrain: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    desired: Vec3,
+    toward: Vec3,
+    sea: f32,
+    body: GroundCaptureProfile,
+) -> CapturePose {
+    // Compare every admitted support in three dimensions. A cave camera must
+    // not snap onto the exterior roof merely because that is the highest span
+    // in the closest horizontal column.
+    let mut candidates: Vec<_> = HexCoord::from_world(desired)
+        .within_radius(6)
+        .into_iter()
+        .filter(|coord| {
+            terrain
+                .residency
+                .as_ref()
+                .is_none_or(|residency| residency.at(*coord, geometry) == ArenaAvailability::Ready)
+        })
+        .flat_map(|coord| {
+            terrain
+                .columns
+                .get(&coord)
+                .into_iter()
+                .flatten()
+                .map(move |span| hex_core::TilePos::new(coord, span.top_level))
+        })
+        .collect();
+    candidates.sort_by(|a, b| {
+        a.coord
+            .to_world(geometry.top(*a) + body.eye)
+            .distance_squared(desired)
+            .total_cmp(
+                &b.coord
+                    .to_world(geometry.top(*b) + body.eye)
+                    .distance_squared(desired),
+            )
+            .then_with(|| a.cmp(b))
+    });
+    let eye = candidates.into_iter().find_map(|support| {
+        let coord = support.coord;
+        let ground = geometry.top(support);
+        if body
+            .maximum_height_shift
+            .is_some_and(|limit| (ground + body.eye - desired.y).abs() > limit)
+            || ground < sea
+            || terrain.liquids.iter().any(|span| {
+                span.bottom.coord == coord
+                    && span.top_level > support.level
+                    && geometry.top(span.bottom) - geometry.level_height < ground + body.height
+            })
+        {
+            return None;
+        }
+        let eye = coord.to_world(ground + body.eye);
+        let clear = [
+            Vec3::ZERO,
+            Vec3::X * body.radius,
+            -Vec3::X * body.radius,
+            Vec3::Z * body.radius,
+            -Vec3::Z * body.radius,
+        ]
+        .into_iter()
+        .all(|offset| {
+            let low = geometry.voxel_at(eye.with_y(ground + 0.02) + offset);
+            let high = geometry.voxel_at(eye.with_y(ground + body.height - 0.02) + offset);
+            low.zip(high).is_some_and(|(low, high)| {
+                terrain.residency.as_ref().is_none_or(|residency| {
+                    residency.at(low.coord, geometry) == ArenaAvailability::Ready
+                }) && (low.level..=high.level).all(|level| {
+                    terrain
+                        .solid_at(hex_core::TilePos::new(low.coord, level))
+                        .is_none()
+                })
+            })
+        });
+        clear.then_some(eye)
+    });
+    let position = eye.unwrap_or(desired + Vec3::Y * body.eye);
+    let direction = (toward - desired).with_y(0.0).normalize_or(Vec3::NEG_Z);
+    CapturePose {
+        camera: Transform::from_translation(position)
+            .looking_at(position + direction * 30.0, Vec3::Y),
+        interest: desired,
+        overview_height: None,
+        ground_pending: eye.is_none(),
+    }
+}
+
+// A coarse height sample can misclassify a steep coast. Wait for actual admitted
+// liquid intervals so the underwater fixture cannot start inside the seabed.
+fn waterline_site(
+    terrain: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    spawn: Vec3,
+    bay: Vec3,
+    sea: f32,
+) -> Option<Vec3> {
+    (0_u16..=100)
+        .map(|step| spawn.lerp(bay, f32::from(step) / 100.0))
+        .find(|point| {
+            let coord = HexCoord::from_world(*point);
+            let first = terrain
+                .liquids
+                .partition_point(|span| span.bottom.coord < coord);
+            terrain
+                .liquids
+                .iter()
+                .skip(first)
+                .take_while(|span| span.bottom.coord == coord)
+                .any(|span| {
+                    let top = geometry.top(hex_core::TilePos::new(coord, span.top_level));
+                    let bottom = geometry.top(span.bottom) - geometry.level_height;
+                    (top - sea).abs() < 0.01 && top - bottom >= 5.0
+                })
+        })
+}
+
+/// Fit the complete finite footprint, including its highest visible terrain, with
+/// a ten-percent frame margin. Orthographic overview avoids the old distant wide
+/// lens shrinking all three clusters; other captures retain the gameplay lens.
+fn overview_pose(origin: Vec2, extent: Vec2, sea: f32, summit: f32, interest: Vec3) -> CapturePose {
+    overview_pose_from(
+        origin,
+        extent,
+        sea,
+        summit,
+        interest,
+        Vec3::new(0.0, 1.65, 1.0),
+    )
+}
+
+fn overview_pose_from(
+    origin: Vec2,
+    extent: Vec2,
+    sea: f32,
+    summit: f32,
+    interest: Vec3,
+    direction: Vec3,
+) -> CapturePose {
+    let center = origin + extent * 0.5;
+    let target = Vec3::new(center.x, (sea + summit) * 0.5, center.y);
+    let back = direction.normalize();
+    let right = Vec3::Y.cross(back).normalize();
+    let up = back.cross(right);
+    let corners = overview_corners(origin, extent, sea, summit);
+    let mut half_width: f32 = 0.0;
+    let mut half_height: f32 = 0.0;
+    let mut near_depth: f32 = 0.0;
+    for corner in corners {
+        let local = corner - target;
+        half_width = half_width.max(local.dot(right).abs());
+        half_height = half_height.max(local.dot(up).abs());
+        near_depth = near_depth.max(local.dot(back));
+    }
+    // The windowless arena canvas is fixed at 1600 × 900.
+    let aspect = 16.0 / 9.0;
+    let height = 2.0 * half_height.max(half_width / aspect) / 0.9;
+    CapturePose {
+        camera: Transform::from_translation(target + back * (near_depth + 800.0))
+            .looking_at(target, Vec3::Y),
+        interest,
+        overview_height: Some(height),
+        ground_pending: false,
+    }
+}
+
+fn overview_corners(origin: Vec2, extent: Vec2, sea: f32, summit: f32) -> [Vec3; 8] {
+    std::array::from_fn(|index| {
+        Vec3::new(
+            origin.x + if index & 1 == 0 { 0.0 } else { extent.x },
+            if index & 2 == 0 { sea } else { summit },
+            origin.y + if index & 4 == 0 { 0.0 } else { extent.y },
+        )
+    })
+}
+
+/// Explicit windowless fixture: move the player to admitted water and press B.
+/// The normal controller owns deployment; this is presentation staging, not travel evidence.
+pub(super) fn stage_boat_capture(world: &mut World, view: &str) -> Result<(), String> {
+    use hex_core::ocean::{OceanSurfaceState, OceanWaterColumn};
+    if view != "northern-boat" || boat_capture_ready(world.resource::<ArenaSession>(), view) {
+        return Ok(());
+    }
+    let tick = world.resource::<ArenaSession>().tick;
+    if tick < 2 {
+        return Ok(());
+    }
+    if let Some(attempt) = world.resource::<NorthernPresentation>().boat_fixture_tick {
+        if tick > attempt + 2 {
+            return Err(format!(
+                "Boat fixture did not deploy: {}",
+                world.resource::<ArenaSession>().notice
+            ));
+        }
+        return Ok(());
+    }
+    let Some(streamed) = world.get_resource::<StreamedArena>() else {
+        return Ok(());
+    };
+    let Some(environment) = world.get_resource::<OceanEnvironmentView>() else {
+        return Ok(());
+    };
+    let map = &streamed.overview;
+    let Some(bay) = map.anchors.get("bay").copied().map(Vec3::from_array) else {
+        return Err("Boat fixture requires the authored bay".into());
+    };
+    let spawn = Vec3::from_array(map.player_spawn);
+    let terrain = world.resource::<ArenaTerrainView>();
+    let geometry = *world.resource::<ArenaVoxelGeometry>();
+    let Some(first_water) = waterline_site(terrain, geometry, spawn, bay, map.sea_level) else {
+        return Ok(());
+    };
+    let site = first_water.lerp(bay, 0.35);
+    let coord = HexCoord::from_world(site);
+    let available = terrain
+        .residency
+        .as_ref()
+        .map_or(ArenaAvailability::OutsideWorld, |residency| {
+            residency.at(coord, geometry)
+        });
+    let start = terrain
+        .liquids
+        .partition_point(|span| span.bottom.coord < coord);
+    let column = terrain
+        .liquids
+        .iter()
+        .skip(start)
+        .take_while(|span| span.bottom.coord == coord)
+        .last()
+        .map(|span| OceanWaterColumn {
+            mean_height: geometry.top(hex_core::TilePos::new(coord, span.top_level)),
+            bed_height: geometry.top(span.bottom) - geometry.level_height,
+            water_id: span.substance,
+        });
+    let OceanSurfaceState::ReadyWet(surface) = environment.sample(
+        Vec2::new(site.x, site.z),
+        world.resource::<ArenaSession>().ocean_time(),
+        available,
+        column,
+    ) else {
+        return Ok(());
+    };
+    let feet = site.with_y(surface.height + 0.2);
+    let heading = (bay - site).with_y(0.0).normalize_or(Vec3::NEG_Z);
+    let mut session = world.resource_mut::<ArenaSession>();
+    let human = session
+        .human_actor_id()
+        .ok_or("Boat fixture requires a player")?;
+    let actor = session
+        .actors
+        .iter_mut()
+        .find(|actor| actor.id == human)
+        .ok_or("Missing boat fixture player")?;
+    actor.feet = feet;
+    actor.previous_feet = feet;
+    actor.aim = heading;
+    let intent = hex_arena::ActorIntent {
+        boat_toggle: true,
+        aim: heading,
+        ..default()
+    };
+    world.resource_mut::<hex_arena::ArenaInput>().human = intent;
+    if let Some((_, recorded)) = world.resource_mut::<ViewState>().capture_inputs.last_mut() {
+        *recorded = intent;
+    }
+    world
+        .resource_mut::<NorthernPresentation>()
+        .boat_fixture_tick = Some(tick);
+    Ok(())
+}
+
+pub(super) fn boat_capture_ready(session: &ArenaSession, view: &str) -> bool {
+    view == "northern-boat"
+        && session
+            .human_actor_id()
+            .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
+            .and_then(hex_arena::Actor::boat)
+            .is_some_and(|boat| boat.active)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn waterline_fixture_waits_for_deep_admitted_water() {
+        use hex_core::arena::ArenaSolidSpan;
+        let geometry = ArenaVoxelGeometry {
+            level_height: 1.0,
+            vertical_offset: 1.0,
+            ..default()
+        };
+        let spawn = HexCoord::ORIGIN.to_world(10.0);
+        let deep = HexCoord::from_axial(2, 0);
+        let bay = deep.to_world(10.0);
+        let mut terrain = ArenaTerrainView::default();
+        assert!(waterline_site(&terrain, geometry, spawn, bay, 10.0).is_none());
+        terrain.liquids.push(ArenaSolidSpan {
+            bottom: hex_core::TilePos::new(HexCoord::from_axial(1, 0), 8),
+            top_level: 9,
+            substance: hex_core::SubstanceId::AIR,
+        });
+        assert!(waterline_site(&terrain, geometry, spawn, bay, 10.0).is_none());
+        terrain.liquids.push(ArenaSolidSpan {
+            bottom: hex_core::TilePos::new(deep, 2),
+            top_level: 9,
+            substance: hex_core::SubstanceId::AIR,
+        });
+        let site = waterline_site(&terrain, geometry, spawn, bay, 10.0)
+            .expect("the admitted deep interval is suitable for both water views");
+        assert_eq!(HexCoord::from_world(site), deep);
+    }
+
+    #[test]
+    fn authored_ground_camera_keeps_mountain_sightline_after_support_admission() {
+        let original = Vec3::new(70.0, 187.7, 55.0);
+        let target = Vec3::new(376.0, 363.0, -605.0);
+        let grounded = Vec3::new(69.28, 186.13, 55.5);
+        let pose = authored_ground_direction(grounded, original, target);
+        let expected = (target - original).normalize();
+        assert!(pose.translation.distance(grounded) < 0.0001);
+        assert!(Vec3::from(pose.forward()).distance(expected) < 0.0001);
+        assert!(pose.forward().y > 0.2);
+    }
+
+    #[test]
+    fn ground_fixture_chooses_clear_stacked_support_near_authored_height() {
+        use hex_core::arena::ArenaSolidSpan;
+        let geometry = ArenaVoxelGeometry::default();
+        let body = GroundCaptureProfile {
+            eye: 0.93,
+            height: 1.2,
+            radius: 0.25,
+            maximum_height_shift: Some(HexCoord::from_axial(6, 0).to_world(0.0).length()),
+        };
+        let mut terrain = ArenaTerrainView::default();
+        let span = |coord, bottom, top_level| ArenaSolidSpan {
+            bottom: hex_core::TilePos::new(coord, bottom),
+            top_level,
+            substance: hex_core::SubstanceId::AIR,
+        };
+        terrain.columns.insert(
+            HexCoord::ORIGIN,
+            vec![
+                span(HexCoord::ORIGIN, 0, 80),
+                span(HexCoord::ORIGIN, 100, 120),
+                span(HexCoord::ORIGIN, 180, 200),
+            ],
+        );
+        // Water above a cave roof must not make the dry lower floor wet.
+        terrain.liquids.push(span(HexCoord::ORIGIN, 201, 208));
+        for level in [80, 120] {
+            let height = geometry.top(hex_core::TilePos::new(HexCoord::ORIGIN, level)) + body.eye;
+            let desired = Vec3::Y * height;
+            let pose = ground_capture_pose(&terrain, geometry, desired, Vec3::NEG_Z, 0.0, body);
+            assert!(!pose.ground_pending);
+            assert!(pose.camera.translation.distance(desired) < 0.001);
+        }
+        // A blocked center should use a nearby floor at the same level before
+        // considering a clear but unrelated upper storey in that center.
+        terrain
+            .object_columns
+            .insert(HexCoord::ORIGIN, vec![span(HexCoord::ORIGIN, 81, 84)]);
+        let neighbor = HexCoord::from_axial(1, 0);
+        terrain
+            .columns
+            .insert(neighbor, vec![span(neighbor, 0, 80)]);
+        let height = geometry.top(hex_core::TilePos::new(HexCoord::ORIGIN, 80)) + body.eye;
+        let pose =
+            ground_capture_pose(&terrain, geometry, Vec3::Y * height, Vec3::NEG_Z, 0.0, body);
+        assert!(!pose.ground_pending);
+        assert_eq!(HexCoord::from_world(pose.camera.translation), neighbor);
+        assert!((pose.camera.translation.y - height).abs() < 0.001);
+        terrain.columns.remove(&neighbor);
+        let pose =
+            ground_capture_pose(&terrain, geometry, Vec3::Y * height, Vec3::NEG_Z, 0.0, body);
+        assert!(
+            pose.ground_pending,
+            "an obstructed lower floor cannot authorize an upper storey"
+        );
+    }
+
+    #[test]
+    fn ground_fixture_waits_for_clear_actual_terrain() {
+        use hex_core::arena::ArenaSolidSpan;
+        let geometry = ArenaVoxelGeometry::default();
+        let mut terrain = ArenaTerrainView::default();
+        let body = GroundCaptureProfile {
+            eye: 0.93,
+            height: 1.2,
+            radius: 0.25,
+            maximum_height_shift: None,
+        };
+        let desired = Vec3::ZERO;
+        let toward = Vec3::NEG_Z * 30.0;
+        assert!(ground_capture_pose(&terrain, geometry, desired, toward, 0.0, body).ground_pending);
+        let floor = ArenaSolidSpan {
+            bottom: hex_core::TilePos::new(HexCoord::ORIGIN, 0),
+            top_level: 80,
+            substance: hex_core::SubstanceId::AIR,
+        };
+        terrain.columns.insert(HexCoord::ORIGIN, vec![floor]);
+        let pose = ground_capture_pose(&terrain, geometry, desired, toward, 0.0, body);
+        assert!(!pose.ground_pending);
+        assert!(
+            (pose.camera.translation.y - (80.0 * geometry.level_height + body.eye)).abs() < 0.001
+        );
+        terrain.object_columns.insert(
+            HexCoord::ORIGIN,
+            vec![ArenaSolidSpan {
+                bottom: hex_core::TilePos::new(HexCoord::ORIGIN, 81),
+                top_level: 90,
+                substance: hex_core::SubstanceId::AIR,
+            }],
+        );
+        assert!(ground_capture_pose(&terrain, geometry, desired, toward, 0.0, body).ground_pending);
+        // An overhead ornament above the actual 1.2-unit body must not demand
+        // the former hardcoded 1.9-unit clearance; a lower obstruction must wait.
+        for (bottom, blocked) in [(85, false), (83, true)] {
+            terrain.object_columns.insert(
+                HexCoord::ORIGIN,
+                vec![ArenaSolidSpan {
+                    bottom: hex_core::TilePos::new(HexCoord::ORIGIN, bottom),
+                    top_level: 90,
+                    substance: hex_core::SubstanceId::AIR,
+                }],
+            );
+            assert_eq!(
+                ground_capture_pose(&terrain, geometry, desired, toward, 0.0, body).ground_pending,
+                blocked
+            );
+        }
+    }
+
+    #[test]
+    fn overview_fits_complete_published_bounds_with_margin() {
+        let origin = Vec2::new(-1216.0, -1056.0);
+        let extent = Vec2::new(2432.0, 2112.0);
+        let interest = Vec3::new(-645.0, 161.7, -100.5);
+        let pose = overview_pose(origin, extent, 140.0, 442.75, interest);
+        let half_height = pose.overview_height.expect("orthographic overview") * 0.5;
+        let half_width = half_height * (16.0 / 9.0);
+        for corner in overview_corners(origin, extent, 140.0, 442.75) {
+            let local = pose.camera.rotation.inverse() * (corner - pose.camera.translation);
+            assert!(local.x.abs() <= half_width * 0.901);
+            assert!(local.y.abs() <= half_height * 0.901);
+            assert!(local.z < -0.035 && local.z > -24_000.0);
+        }
+        // The landscape occupies useful image width while all world edges remain included.
+        assert!(1528.0 / (2.0 * half_width) > 0.38);
+        assert_eq!(pose.interest, interest);
+    }
+
+    #[test]
+    fn mainland_proportion_views_fit_bounds_from_every_requested_direction() {
+        let origin = Vec2::new(-880.0, -795.0);
+        let extent = Vec2::new(1760.0, 1590.0);
+        for direction in [
+            Vec3::new(0.0, 1.35, 1.0),
+            Vec3::new(1.0, 1.35, 0.35),
+            Vec3::new(-1.0, 1.35, -1.0),
+        ] {
+            let pose = overview_pose_from(origin, extent, 140.0, 395.0, Vec3::ZERO, direction);
+            let half_height = pose.overview_height.expect("orthographic mainland") * 0.5;
+            let half_width = half_height * (16.0 / 9.0);
+            for corner in overview_corners(origin, extent, 140.0, 395.0) {
+                let local = pose.camera.rotation.inverse() * (corner - pose.camera.translation);
+                assert!(local.x.abs() <= half_width * 0.901);
+                assert!(local.y.abs() <= half_height * 0.901);
+                assert!(local.z < -0.035 && local.z > -24_000.0);
+            }
+        }
+    }
+}

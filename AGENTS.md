@@ -6,6 +6,12 @@ directory with its own `CLAUDE.md`, read that file too. Treat
 `docs/architecture.md`, `docs/contracts.md`, and the relevant system or design doc
 as contracts rather than background reading.
 
+## Temporary usage budget
+
+Until the September 14, 2026 reset, follow the user-approved
+[lean development workflow](docs/development/lean-until-reset.md): small changes,
+focused checks and user playtests; checkpoint at **7% remaining**, replacing 16%.
+
 ## Launch source builds through Cargo
 
 When asked to open or launch the game from this checkout, never execute
@@ -24,7 +30,7 @@ workflow deliberately stages `assets/` beside the executable.
 
 The ordinary Main Menu includes **Battle Mode**. It opens the isolated native
 arena; exiting it leaves the Main Menu available. For a direct source launch use
-`cargo battle` (Fort versus Dragon, paused at the ready screen). Choose Play or
+`cargo battle` (Forest–Massif, paused at the ready screen). Choose Play or
 Spectate, map and parties there. To reproduce the original Shadow duel, use
 `python3 tools/arena.py launch --map duel`; observer launches add `--spectator`
 and `--team-a` / `--team-b`. The helper launches through Cargo too; apply the asset
@@ -111,7 +117,7 @@ and hot-file overlap rather than opening one PR per ticket.
 
 ## Ownership and shared concerns
 
-- The world owner controls `hex_map`, `hex_world`, `hex_perception`, and their
+- The world owner controls `hex_schematic`, `hex_map`, `hex_world`, `hex_perception`, and their
   domain content and schema. The gameplay owner controls `hex_core`, `hex_units`,
   `hex_combat`, `hex_lattice`, `hex_anim`, and generic asset-loader infrastructure.
 - `hex_game` is shared integration; `hex_objects` and `hex_editor` are shared
@@ -145,10 +151,17 @@ and hot-file overlap rather than opening one PR per ticket.
   CI-equivalent gate on the combined wave candidate. Run the automated visual walk
   and human runtime route only when the candidate affects presentation or experience;
   a logic-only candidate records the exact-head hook-backed classification instead.
+- Use `$inspect-game-renders` after every materially different map render and before
+  showing or approving changed map presentation. Require a fresh full-footprint frame,
+  changed-region views from multiple camera modes and azimuths, and a motion pass for
+  flicker, popping, translucent/emissive content, or camera collision. A cropped,
+  stale, or mechanically completed but uninspected pack is not visual evidence.
 - Automated presentation review must not open, activate, or focus a visible native game
-  window or begin screen recording without explicit user approval. If noninteractive
-  capture is unavailable or regresses, record the review as blocked instead of substituting
-  a visible launch.
+  window or begin screen recording without explicit user approval. Routine screenshot
+  and visual-walk automation must use the repository's windowless render targets. Launch
+  a visible game only when the user explicitly asks to play or agrees to a named live
+  motion review. If noninteractive capture is unavailable or regresses, record the review
+  as blocked instead of substituting a visible launch.
 
 ## Code review rules
 

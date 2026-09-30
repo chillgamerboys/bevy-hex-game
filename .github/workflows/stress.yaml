@@ -43,6 +43,8 @@ jobs:
             filter: procedural_v3::forest::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
           - name: v3-waterfall
             filter: procedural_v3::waterfall::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
+          - name: v3-crystal-mountain
+            filter: procedural_v3::macro_world::tests::crystal_mountain_release_corpus_validates_32_seeds
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -62,6 +64,54 @@ jobs:
         with:
           name: corpus-${{ matrix.name }}
           path: stress.log
+          if-no-files-found: error
+
+  schematic-corpus:
+    name: Grand V3 schematic corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run release schematic validity, diversity, and performance corpus
+        shell: bash
+        run: |
+          set -o pipefail
+          { time cargo test --release --package hex_schematic --test acceptance release_corpus_diversity_performance_and_memory_gate -- --ignored --exact --nocapture --test-threads=1; } 2>&1 | tee schematic-corpus.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grand-v3-schematic-corpus
+          path: schematic-corpus.log
+          if-no-files-found: error
+
+  grand-v3-map-corpus:
+    name: Grand V3 map acceptance and full-world corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Run release Grand V3 acceptance and full-world corpora
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            time cargo test --release --package hex_map --test schematic_compile -- --nocapture --test-threads=1 &&
+            time cargo test --release --package hex_map --test schematic_compile grand_v3_full_world_release_corpus_compiles_32_seeds -- --ignored --exact --nocapture --test-threads=1
+          } 2>&1 | tee grand-v3-map-corpus.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grand-v3-map-corpus
+          path: grand-v3-map-corpus.log
           if-no-files-found: error
 
   performance:
@@ -87,7 +137,10 @@ jobs:
             time cargo test --release --package hex_ai tests::baseline_ai_radius_team_matrix_release_benchmark -- --ignored --exact --nocapture --test-threads=1
             time cargo test --release --package hex_units formation::tests::six_member_formation_benchmark_matrix -- --ignored --exact --nocapture --test-threads=1
             time cargo test --release --package hex_perception runtime::tests::radius_40_recomputation_benchmark -- --ignored --exact --nocapture --test-threads=1
+            time cargo test --release --package hex_perception runtime::tests::radius_40_dense_walls_and_six_observers_benchmark -- --ignored --exact --nocapture --test-threads=1
             time cargo test --release --package hex_perception runtime::tests::radius_40_ten_thousand_idle_frames_reuse_every_projection -- --ignored --exact --nocapture --test-threads=1
+            time cargo test --release --package hex_game --features test-support --lib scenarios::tests::grand_v3_idle_contract::grand_v3_ten_thousand_idle_frames_reuse_every_runtime_projection -- --ignored --exact --nocapture --test-threads=1
+            time cargo test --release --package hex_game --features test-support scenarios::tests::shipped_large_maps_character_collision_release_timing -- --ignored --exact --nocapture --test-threads=1
           } 2>&1 | tee performance.log
       - uses: actions/upload-artifact@v4
         if: always()

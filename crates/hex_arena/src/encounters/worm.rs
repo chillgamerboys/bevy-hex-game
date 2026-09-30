@@ -16,14 +16,22 @@ use hex_core::arena::{
 use hex_core::TerrainDamageKind;
 
 /// Species-specific earth sensing supplies a position, never a shot forecast.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct BurrowTarget {
     id: ActorId,
     point: Vec3,
     tick: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct Escape {
+    origin: Vec3,
+    depth: u8,
+    buried_seconds: f32,
+    rise_admitted: bool,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(super) struct Controller {
     heading: f32,
     lift: f32,
@@ -42,6 +50,7 @@ pub(super) struct Controller {
     preferred_threat: Option<ActorId>,
     pursuit_active: bool,
     attempted_this_exposure: bool,
+    escape: Option<Escape>,
 }
 
 impl Controller {
@@ -57,13 +66,14 @@ impl Controller {
             seen: Vec::new(),
             target: None,
             goal: actor.feet,
-            search_step: actor.id % 4,
+            search_step: u8::try_from(actor.id % 4).unwrap_or_default(),
             committed_direction: None,
             committed_goal: actor.feet,
             burrow_target: None,
             preferred_threat: None,
             pursuit_active: false,
             attempted_this_exposure: false,
+            escape: None,
         }
     }
 
@@ -76,6 +86,7 @@ impl Controller {
         }
         if next == WormPhase::Exposed {
             self.attempted_this_exposure = false;
+            self.escape = None;
         }
         if next == WormPhase::Diving {
             self.target = None;
@@ -105,8 +116,36 @@ impl Controller {
         self.lift <= SKIN
             && pose(actor).is_some_and(|body| {
                 body.parts.iter().all(|part| part.offset.y.abs() <= SKIN)
-                    && travel_depth(body, self.surface, world, geometry, depth)
+                    && travel_depth_with_search(
+                        body,
+                        self.surface,
+                        world,
+                        geometry,
+                        self.escape.as_ref().map_or(depth, |escape| escape.depth),
+                        self.escape.as_ref().map_or(2, |escape| escape.depth),
+                    )
             })
+    }
+
+    fn escaped_to_shallow_band(
+        &self,
+        body: PrismPose,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        tuning: &EncounterTuning,
+    ) -> bool {
+        self.escape.as_ref().is_some_and(|escape| {
+            escape.rise_admitted
+                && (body.feet - escape.origin).with_y(0.0).length() >= tuning.worm_escape_distance
+                && band(
+                    body,
+                    self.surface,
+                    world,
+                    geometry,
+                    tuning.worm_depth_levels,
+                )
+                .is_some()
+        })
     }
 
     fn sense_underground(&mut self, actor: &Actor, actors: &[Actor], tick: u64) {
@@ -155,6 +194,50 @@ impl Controller {
         } else if self.phase == WormPhase::Diving && buried {
             self.phase(WormPhase::Travel);
             self.next_sense = tick;
+        }
+        if self.phase == WormPhase::Diving
+            && self.pursuit_active
+            && !buried
+            && self.lift <= SKIN
+            && self.phase_time >= c.worm_surface_interval
+        {
+            if self.escape.is_none()
+                && pose(actor).is_some_and(|body| {
+                    escape_band(body, self.surface, world, geometry, c).is_some()
+                })
+            {
+                self.escape = Some(Escape {
+                    origin: actor.feet,
+                    depth: c.worm_escape_depth_levels,
+                    buried_seconds: 0.0,
+                    rise_admitted: false,
+                });
+                self.phase_time = 0.0;
+                self.blocked = 0.0;
+            } else if self.escape.is_none() || self.blocked >= c.worm_surface_interval {
+                // Bedrock, protected earth or a missing lower floor can make
+                // escape impossible. Retry a physically admitted stationary rise.
+                self.phase(WormPhase::Emerging);
+                self.next_sense = tick;
+            }
+        }
+        if self.phase == WormPhase::Travel && buried {
+            if let Some(escape) = &mut self.escape {
+                escape.buried_seconds += STEP;
+            }
+            let restored = pose(actor).is_some_and(|body| {
+                self.escaped_to_shallow_band(body, world, geometry, c)
+                    && travel_depth(body, self.surface, world, geometry, c.worm_depth_levels)
+            });
+            let expired = self.escape.as_ref().is_some_and(|escape| {
+                escape.buried_seconds >= c.worm_escape_seconds && escape.rise_admitted
+            });
+            if restored || expired {
+                // Keep the deeper permission until the head actually emerges;
+                // a blocked shallow return must not strand a deep body.
+                self.phase(WormPhase::Emerging);
+                self.next_sense = tick;
+            }
         }
         let exposed = actor.worm().is_some_and(|s| s.exposed);
         let can_see = exposed && matches!(self.phase, WormPhase::Emerging | WormPhase::Exposed);
@@ -217,6 +300,7 @@ impl Controller {
         });
         if self.phase == WormPhase::Travel
             && buried
+            && self.escape.is_none()
             && approach_ready
             && (self.phase_time >= c.worm_surface_interval || self.blocked >= 0.4)
         {
@@ -287,7 +371,9 @@ impl Controller {
         if self.goal.distance(self.committed_goal) > 2.0 || self.blocked > 0.2 {
             self.committed_direction = None;
         }
-        let direction = if self.phase == WormPhase::Travel && buried {
+        let returning =
+            pose(actor).is_some_and(|body| self.escaped_to_shallow_band(body, world, geometry, c));
+        let direction = if self.phase == WormPhase::Travel && buried && !returning {
             self.committed_direction
                 .unwrap_or_else(|| (self.goal - actor.feet).with_y(0.0).normalize_or_zero())
         } else {
@@ -385,14 +471,14 @@ fn surface_at(
     coord: HexCoord,
     reference: f32,
     geometry: ArenaVoxelGeometry,
+    search: u8,
 ) -> Option<TilePos> {
     let center = geometry.voxel_at(coord.to_world(reference))?.level;
-    (center - 2..=center + 2)
+    (center - i32::from(search)..=center + i32::from(search))
         .filter(|level| *level >= geometry.min_level && *level <= geometry.max_level)
         .map(|level| TilePos::new(coord, level))
         .filter(|p| {
-            view.voxels.contains_key(p)
-                && !view.voxels.contains_key(&TilePos::new(coord, p.level + 1))
+            view.solid_at(*p).is_some() && view.solid_at(TilePos::new(coord, p.level + 1)).is_none()
         })
         .min_by(|a, b| {
             (geometry.top(*a) - reference)
@@ -416,19 +502,10 @@ fn head_supports(
             // the anchored tail prevents whole-body settling. Search only this
             // actual head column and the finite resident levels. Never select
             // an unrelated upper roof above both the old band and current head.
-            view.voxels
-                .range(
-                    TilePos::new(coord, geometry.min_level)
-                        ..=TilePos::new(coord, geometry.max_level),
-                )
+            worm_geometry::column_tops(view, coord, geometry)
+                .into_iter()
                 .rev()
-                .find_map(|(pos, _)| {
-                    (geometry.top(*pos) <= ceiling
-                        && !view
-                            .voxels
-                            .contains_key(&TilePos::new(coord, pos.level + 1)))
-                    .then_some(*pos)
-                })
+                .find(|pos| geometry.top(*pos) <= ceiling)
         })
         .collect()
 }
@@ -440,9 +517,21 @@ fn band(
     geometry: ArenaVoxelGeometry,
     depth: u8,
 ) -> Option<f32> {
+    let (low, high) = surface_range(body, reference, view, geometry, 2)?;
+    (high - low <= f32::from(depth.saturating_sub(1)) * geometry.level_height + SKIN)
+        .then_some(high)
+}
+
+fn surface_range(
+    body: PrismPose,
+    reference: f32,
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    search: u8,
+) -> Option<(f32, f32)> {
     let supports: Option<Vec<_>> = worm_geometry::footprint_columns(body)?
         .into_iter()
-        .map(|coord| surface_at(view, coord, reference, geometry))
+        .map(|coord| surface_at(view, coord, reference, geometry, search))
         .collect();
     let mut low = f32::INFINITY;
     let mut high = f32::NEG_INFINITY;
@@ -450,8 +539,32 @@ fn band(
         low = low.min(geometry.top(surface));
         high = high.max(geometry.top(surface));
     }
-    (high - low <= f32::from(depth.saturating_sub(1)) * geometry.level_height + SKIN)
-        .then_some(high)
+    Some((low, high))
+}
+
+fn escape_band(
+    body: PrismPose,
+    reference: f32,
+    view: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    tuning: &EncounterTuning,
+) -> Option<(f32, f32)> {
+    let (low, high) = surface_range(
+        body,
+        reference,
+        view,
+        geometry,
+        tuning.worm_escape_depth_levels,
+    )?;
+    let bottom = high - f32::from(tuning.worm_escape_depth_levels) * geometry.level_height + SKIN;
+    let top = low - geometry.level_height + SKIN;
+    if bottom > top {
+        return None;
+    }
+    // The entire rigid body fits below every local floor. Ordinary terrain
+    // admission still rejects bedrock, protected cells and occupied volumes.
+    let preferred = low - f32::from(tuning.worm_depth_levels) * geometry.level_height + SKIN;
+    Some((high, preferred.clamp(bottom, top)))
 }
 
 fn travel_depth(
@@ -461,11 +574,22 @@ fn travel_depth(
     geometry: ArenaVoxelGeometry,
     depth: u8,
 ) -> bool {
+    travel_depth_with_search(body, reference, world, geometry, depth, 2)
+}
+
+fn travel_depth_with_search(
+    body: PrismPose,
+    reference: f32,
+    world: &ArenaTerrainView,
+    geometry: ArenaVoxelGeometry,
+    depth: u8,
+    search: u8,
+) -> bool {
     let Some(columns) = worm_geometry::footprint_columns(body) else {
         return false;
     };
     columns.into_iter().all(|coord| {
-        surface_at(world, coord, reference, geometry).is_some_and(|surface| {
+        surface_at(world, coord, reference, geometry, search).is_some_and(|surface| {
             let distance = geometry.top(surface) - body.feet.y;
             distance >= geometry.level_height - SKIN * 2.0
                 && distance <= f32::from(depth) * geometry.level_height + SKIN * 2.0
@@ -654,9 +778,8 @@ impl ArenaSession {
             worm_geometry::swept_prism_cells(before, after, geometry).is_ok_and(|cells| {
                 cells.iter().all(|cell| {
                     world
-                        .voxels
-                        .get(cell)
-                        .is_none_or(|material| *material == hex_core::SubstanceId::AIR)
+                        .solid_at(*cell)
+                        .is_none_or(|material| material == hex_core::SubstanceId::AIR)
                 }) && matches!(
                     self.burrow_query.admit(before, after, &context),
                     Admission::Clear
@@ -719,6 +842,74 @@ impl ArenaSession {
         true
     }
 
+    fn escape_rise_admitted(
+        &self,
+        actor: &Actor,
+        control: &Controller,
+        world: &ArenaTerrainView,
+        geometry: ArenaVoxelGeometry,
+        materials: ArenaMaterials,
+        tuning: &EncounterTuning,
+    ) -> bool {
+        let Some(body) = pose(actor) else {
+            return false;
+        };
+        let Some(escape) = &control.escape else {
+            return false;
+        };
+        let Some(surface) =
+            head_supports(body, control.surface, world, geometry).and_then(|supports| {
+                supports
+                    .into_iter()
+                    .map(|p| geometry.top(p))
+                    .max_by(f32::total_cmp)
+            })
+        else {
+            return false;
+        };
+        let height =
+            if (body.feet - escape.origin).with_y(0.0).length() >= tuning.worm_escape_distance {
+                band(
+                    body,
+                    control.surface,
+                    world,
+                    geometry,
+                    tuning.worm_depth_levels,
+                )
+                .map_or(body.feet.y, |surface| {
+                    surface - f32::from(tuning.worm_depth_levels) * geometry.level_height + SKIN
+                })
+            } else {
+                body.feet.y
+            };
+        let lift = (surface + geometry.level_height + SKIN - height).max(0.0);
+        let Some(parts) = WormBodyState::parts_at(tuning.worm_segments, control.heading, lift)
+        else {
+            return false;
+        };
+        // A shallow floor alone does not prove that the head can rise past a
+        // protected roof or another body. Preflight the complete return/rise;
+        // convertible earth is valid, but still needs normal per-step publication.
+        !matches!(
+            self.burrow_query.admit(
+                body,
+                PrismPose {
+                    feet: body.feet.with_y(height),
+                    parts
+                },
+                &BurrowContext {
+                    world,
+                    policy: &self.burrow_policy,
+                    dirt: materials.dirt,
+                    bodies: &self.actors,
+                    owner: actor.id,
+                    geometry,
+                },
+            ),
+            Admission::Blocked(_)
+        )
+    }
+
     pub(super) fn move_worms(
         &mut self,
         intents: &BTreeMap<ActorId, brain::MotionIntent>,
@@ -759,18 +950,59 @@ impl ArenaSession {
                 self.encounter.worms.insert(id, control);
                 continue;
             }
+            if control.escape.is_some() {
+                let admitted =
+                    self.escape_rise_admitted(&actor, &control, world, geometry, materials, c);
+                if let Some(escape) = &mut control.escape {
+                    if escape.rise_admitted && !admitted {
+                        control.committed_direction = None;
+                    }
+                    escape.rise_admitted = admitted;
+                }
+                if control.phase == WormPhase::Emerging && !admitted {
+                    let phase = if control.physically_buried(
+                        &actor,
+                        world,
+                        geometry,
+                        c.worm_depth_levels,
+                    ) {
+                        WormPhase::Travel
+                    } else {
+                        WormPhase::Diving
+                    };
+                    control.phase(phase);
+                    control.next_sense = self.tick;
+                }
+            }
             actor.body.impulse_velocity.y += actor.body.vertical_velocity;
             actor.body.vertical_velocity = 0.0;
             let impulse = actor.body.impulse_velocity * STEP;
             let wanted = if control.phase == WormPhase::Travel
                 && control.physically_buried(&actor, world, geometry, c.worm_depth_levels)
             {
-                intents.get(&id).map_or(Vec3::ZERO, |i| i.direction)
+                let requested = intents.get(&id).map_or(Vec3::ZERO, |i| i.direction);
+                if control.escaped_to_shallow_band(before, world, geometry, c)
+                    || control.escape.as_ref().is_some_and(|escape| {
+                        escape.buried_seconds >= c.worm_escape_seconds && !escape.rise_admitted
+                    })
+                {
+                    Vec3::ZERO
+                } else if control.escape.is_some() && requested.length_squared() < SKIN * SKIN {
+                    (control.goal - actor.feet).with_y(0.0).normalize_or_zero()
+                } else {
+                    requested
+                }
             } else {
                 Vec3::ZERO
             };
+            let goal_distance = (control.goal - actor.feet).with_y(0.0).length_squared();
+            let evade_blocked_rise = control.escape.as_ref().is_some_and(|escape| {
+                !escape.rise_admitted
+                    && escape.buried_seconds < c.worm_escape_seconds
+                    && goal_distance < c.worm_escape_distance * c.worm_escape_distance
+            });
             let trial = (self.tick + u64::from(id) * 3).is_multiple_of(20);
-            let turns: &[f32] = if trial && control.blocked > STEP {
+            let turns: &[f32] = if trial && (control.blocked > STEP || evade_blocked_rise) {
                 &[
                     0.0,
                     std::f32::consts::FRAC_PI_3,
@@ -804,6 +1036,14 @@ impl ArenaSession {
                     feet: feet + impulse,
                     parts: proposed_parts,
                 };
+                if evade_blocked_rise
+                    && (candidate.feet - control.goal).with_y(0.0).length_squared() < goal_distance
+                {
+                    // Chasing directly under a nearby body can keep the full
+                    // head rise blocked forever. Use the same finite detours to
+                    // gain room before consuming the remaining escape budget.
+                    continue;
+                }
                 let travel_band = band(
                     candidate,
                     control.surface,
@@ -811,8 +1051,14 @@ impl ArenaSession {
                     geometry,
                     c.worm_depth_levels,
                 );
+                let escape_floor = control
+                    .escape
+                    .as_ref()
+                    .and_then(|_| escape_band(candidate, control.surface, world, geometry, c));
                 let surface = if matches!(control.phase, WormPhase::Emerging | WormPhase::Exposed)
-                    || (control.phase == WormPhase::Diving && travel_band.is_none())
+                    || (control.phase == WormPhase::Diving
+                        && travel_band.is_none()
+                        && escape_floor.is_none())
                 {
                     // A stationary head rise need not invent a common travel
                     // band beneath a tail spanning an already existing hole.
@@ -827,15 +1073,22 @@ impl ArenaSession {
                         },
                     )
                 } else {
-                    travel_band
+                    escape_floor.map(|(surface, _)| surface).or(travel_band)
                 };
                 let Some(surface) = surface else {
                     continue;
                 };
-                let buried =
+                let shallow =
                     surface - f32::from(c.worm_depth_levels) * geometry.level_height + SKIN;
+                let buried = if control.escaped_to_shallow_band(before, world, geometry, c) {
+                    shallow
+                } else {
+                    escape_floor.map_or(shallow, |(_, height)| height)
+                };
                 let (height, desired_lift) = match control.phase {
-                    WormPhase::Diving if travel_band.is_none() => (actor.feet.y, 0.0),
+                    WormPhase::Diving if travel_band.is_none() && escape_floor.is_none() => {
+                        (actor.feet.y, 0.0)
+                    }
                     WormPhase::Travel | WormPhase::Diving => (buried, 0.0),
                     WormPhase::Emerging | WormPhase::Exposed => (
                         actor.feet.y,
@@ -851,13 +1104,19 @@ impl ArenaSession {
                 else {
                     continue;
                 };
+                let depth = control
+                    .escape
+                    .as_ref()
+                    .map_or(c.worm_depth_levels, |escape| escape.depth);
+                let search = control.escape.as_ref().map_or(2, |escape| escape.depth);
                 if control.phase == WormPhase::Travel
-                    && !travel_depth(
+                    && !travel_depth_with_search(
                         PrismPose { feet, parts },
                         surface,
                         world,
                         geometry,
-                        c.worm_depth_levels,
+                        depth,
+                        search,
                     )
                 {
                     // Ease to a new band's height at the old footprint before
@@ -866,12 +1125,13 @@ impl ArenaSession {
                     feet.z = actor.feet.z;
                     heading = control.heading;
                     parts = before.parts;
-                    if !travel_depth(
+                    if !travel_depth_with_search(
                         PrismPose { feet, parts },
                         control.surface,
                         world,
                         geometry,
-                        c.worm_depth_levels,
+                        depth,
+                        search,
                     ) {
                         continue;
                     }
@@ -1080,7 +1340,7 @@ pub(super) fn deployment_pose(
         Vec3::new(width * 0.5, 0.0, -1.5),
     ];
     for surface in surfaces {
-        if !view.voxels.contains_key(&surface) {
+        if view.solid_at(surface).is_none() {
             continue;
         }
         for behind in directions {
@@ -1091,7 +1351,7 @@ pub(super) fn deployment_pose(
             let footprint = worm_geometry::footprint_columns(body)?;
             if !footprint.iter().all(|coord| {
                 let support = TilePos::new(*coord, surface.level);
-                region.surfaces.contains(&support) && view.voxels.contains_key(&support)
+                region.surfaces.contains(&support) && view.solid_at(support).is_some()
             }) || !worm_geometry::contained(body, geometry)
             {
                 continue;
@@ -1116,4 +1376,19 @@ pub(super) fn deployment_pose(
         }
     }
     None
+}
+
+impl Controller {
+    pub(super) fn shift_clock(&mut self, delta: u64) {
+        self.next_sense = self.next_sense.saturating_add(delta);
+        for seen in &mut self.seen {
+            seen.tick = seen.tick.saturating_add(delta);
+        }
+        if let Some(target) = &mut self.target {
+            target.shift_clock(delta);
+        }
+        if let Some(target) = &mut self.burrow_target {
+            target.tick = target.tick.saturating_add(delta);
+        }
+    }
 }

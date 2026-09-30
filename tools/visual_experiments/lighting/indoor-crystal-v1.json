@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "status": "active",
+  "runtime_setting": "HEX_REVIEW_CRYSTAL_LIGHT_PROFILE",
+  "baseline": {
+    "intensity_lumens": 4500.0,
+    "range": 4.5,
+    "radius": 0.12,
+    "shadow_maps_enabled": false,
+    "contact_shadows_enabled": false
+  },
+  "candidates": [
+    {
+      "id": "i01-crystal-tight",
+      "label": "Tighter crystal lights",
+      "target": "all-crystal-point-lights",
+      "overrides": {
+        "range": 3.0
+      }
+    },
+    {
+      "id": "i02-crystal-broad",
+      "label": "Broader crystal lights",
+      "target": "all-crystal-point-lights",
+      "overrides": {
+        "range": 7.0
+      }
+    },
+    {
+      "id": "i03-heart-feature-shadow",
+      "label": "One selectively shadowed heart light",
+      "target": "crystal-heart-offset-18",
+      "overrides": {
+        "shadow_maps_enabled": true
+      }
+    }
+  ]
+}

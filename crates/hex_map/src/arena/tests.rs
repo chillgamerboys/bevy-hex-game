@@ -13,6 +13,44 @@ fn tick(app: &mut App) {
     app.world_mut().run_schedule(ArenaTick);
 }
 
+#[test]
+fn settle_tick_retains_fresh_announcements_without_an_app_frame() {
+    #[derive(Resource, Default)]
+    struct Observed(Vec<(usize, usize, usize)>);
+    let mut app = app();
+    app.init_resource::<Observed>().add_systems(
+        ArenaTick,
+        (|inbox: Res<ArenaInbox>, mut observed: ResMut<Observed>| {
+            observed
+                .0
+                .push((inbox.edits.len(), inbox.impacts.len(), inbox.burrows.len()));
+        })
+        .in_set(ArenaSystems::ApplyTerrain)
+        .before(apply_terrain),
+    );
+    // These represent the effects emitted by the preceding Simulate. No
+    // PreUpdate runs between this announcement and the immediate save boundary.
+    let pos = TilePos::new(HexCoord::ORIGIN, 3);
+    let generation = app.world().resource::<ArenaWorldState>().generation;
+    let fire = app.world().resource::<ArenaMaterials>().fire;
+    app.world_mut().write_message(TerrainEdit::Clear { pos });
+    app.world_mut().write_message(TerrainImpact {
+        batch: TerrainBatchId(999),
+        volume: Vec::new(),
+        kind: hex_core::TerrainDamageKind::Elemental(fire),
+        power: 1,
+    });
+    app.world_mut().write_message(ArenaBurrowRequest {
+        generation,
+        actor: 1,
+        sequence: 1,
+        volume: Vec::new(),
+    });
+    tick(&mut app);
+    tick(&mut app);
+    assert_eq!(app.world().resource::<Observed>().0, [(1, 1, 1), (0, 0, 0)]);
+}
+
 fn impact(app: &mut App, batch: u64, volume: Vec<TilePos>, power: u8) -> TerrainImpactOutcome {
     let element = app.world().resource::<ArenaMaterials>().fire;
     app.world_mut().write_message(TerrainImpact {

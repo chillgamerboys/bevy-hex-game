@@ -33,7 +33,7 @@
 //! not when the cursor does. Moving the mouse redraws; it does not re-solve.
 
 use bevy::light::NotShadowCaster;
-use bevy::picking::events::{Out, Over, Pointer};
+use bevy::picking::events::{Move, Out, Over, Pointer};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 
@@ -41,11 +41,14 @@ use hex_assets::{GameAssets, SubstanceTable};
 use hex_core::{
     Busy, CameraFocusTarget, GameplaySetup, GameplaySystems, HexTile, Mode, PausableSystems,
     PerceptionSystems, PresentationOcclusion, PresentationOcclusionReason, Screen,
-    TargetReticleRequest, TilePos, TraversalBlockers, Turn, UnitId, WorldMarkerSuppression,
+    TargetReticleRequest, TerrainRenderBatch, TilePos, TraversalBlockers, Turn, UnitId,
+    WorldMarkerSuppression,
 };
 
-use crate::movement::{Body, Footing, Reach, Standing};
-use crate::units::{MovingTo, Party, Player, StandsOn, TileQuery, UnitRegistry};
+use crate::movement::{Body, FootingCache, Reach, Standing};
+use crate::units::{
+    resolve_tile_pointer_target, MovingTo, Party, Player, StandsOn, TileQuery, UnitRegistry,
+};
 use crate::AuthoredObjectOccupancy;
 use crate::Faction;
 use crate::UnitOccupancy;
@@ -171,12 +174,13 @@ struct OverlayAssets {
     target_reticle: Handle<StandardMaterial>,
 }
 
-/// How many times the terrain has been rebuilt.
+/// How many times the terrain's logical run projection has been rebuilt.
 ///
-/// `apply_terrain_edits` despawns the **entire** grid and respawns it on any accepted
-/// edit, so every tile entity gets a new id and the ground a route was found across may
-/// no longer exist. Nothing about the *unit* changes when that happens, which is
-/// exactly why a preview keyed only on the unit outlives the terrain it describes.
+/// `apply_terrain_edits` atomically replaces each affected chunk. Every tile entity
+/// inside those chunks receives a new id, so the ground a route crossed may no longer
+/// exist even though the rest of the grid remains stable. Nothing about the *unit*
+/// changes when that happens, which is exactly why a preview keyed only on the unit
+/// outlives the terrain it describes.
 ///
 /// A counter rather than a comparison of the tiles themselves: the map publishes a few
 /// thousand tile entities, and the question is only ever "is this the same terrain I
@@ -257,10 +261,11 @@ pub fn plugin(app: &mut App) {
                 .in_set(GameplaySystems::WorldFeedback),
         )
         // Observers are global and fire in every state, including the title screen.
-        // These two touch only `HoveredSurface`, which is initialised at startup and
+        // These three touch only `HoveredSurface`, which is initialised at startup and
         // therefore always present — Bevy validates system parameters *before* the
         // body runs, so an `Option` would be required for anything gameplay-scoped.
         .add_observer(on_tile_hovered)
+        .add_observer(on_tile_moved)
         .add_observer(on_tile_unhovered);
 }
 
@@ -576,9 +581,43 @@ fn reconcile_target_reticles(
 fn on_tile_hovered(
     event: On<Pointer<Over>>,
     tiles: TileQuery,
+    terrain_batches: Query<&TerrainRenderBatch>,
     mut hovered: ResMut<HoveredSurface>,
 ) {
-    let Ok((pos, _, _, _)) = tiles.get(event.event_target()) else {
+    let Some(target) = resolve_tile_pointer_target(
+        event.event_target(),
+        event.event.hit.position,
+        event.event.hit.normal,
+        &tiles,
+        &terrain_batches,
+    ) else {
+        return;
+    };
+    let Ok((pos, _, _, _)) = tiles.get(target) else {
+        return;
+    };
+    hovered.0 = Some(*pos);
+}
+
+/// Updates exact hover while the pointer crosses logical hexes inside one combined
+/// mesh. Such crossings do not produce `Out`/`Over` because the picked batch entity
+/// itself did not change.
+fn on_tile_moved(
+    event: On<Pointer<Move>>,
+    tiles: TileQuery,
+    terrain_batches: Query<&TerrainRenderBatch>,
+    mut hovered: ResMut<HoveredSurface>,
+) {
+    let Some(target) = resolve_tile_pointer_target(
+        event.event_target(),
+        event.event.hit.position,
+        event.event.hit.normal,
+        &tiles,
+        &terrain_batches,
+    ) else {
+        return;
+    };
+    let Ok((pos, _, _, _)) = tiles.get(target) else {
         return;
     };
     hovered.0 = Some(*pos);
@@ -588,15 +627,30 @@ fn on_tile_hovered(
 fn on_tile_unhovered(
     event: On<Pointer<Out>>,
     tiles: TileQuery,
+    terrain_batches: Query<&TerrainRenderBatch>,
     mut hovered: ResMut<HoveredSurface>,
 ) {
-    let Ok((pos, _, _, _)) = tiles.get(event.event_target()) else {
-        return;
-    };
+    let current = hovered.0;
+    let resolved_position = resolve_tile_pointer_target(
+        event.event_target(),
+        event.event.hit.position,
+        event.event.hit.normal,
+        &tiles,
+        &terrain_batches,
+    )
+    .and_then(|target| tiles.get(target).ok())
+    .map(|(position, _, _, _)| *position);
+    let current_belongs_to_departing_batch = current.is_some_and(|position| {
+        terrain_batches
+            .get(event.event_target())
+            .is_ok_and(|batch| batch.contains_position(position))
+    });
     // `Over` for the tile being entered can arrive before `Out` for the one being
     // left. Clearing unconditionally would then erase a hover that had already moved
-    // on, and the path would flicker out every time the cursor crossed a tile edge.
-    if hovered.0 == Some(*pos) {
+    // on, and the path would flicker out every time the cursor crossed a batch edge.
+    // `Out` may carry no hit coordinates, so batch membership is the exact fallback
+    // when the current hover still belongs to the departing render batch.
+    if current == resolved_position || current_belongs_to_departing_batch {
         hovered.0 = None;
     }
 }
@@ -610,6 +664,7 @@ fn on_tile_unhovered(
 fn redraw_overlays(
     mut commands: Commands,
     mut preview: ResMut<MovementPreview>,
+    mut footing_cache: ResMut<FootingCache>,
     hovered: Res<HoveredSurface>,
     assets: Option<Res<GameAssets>>,
     overlays: Option<Res<OverlayAssets>>,
@@ -709,7 +764,8 @@ fn redraw_overlays(
     let reach_dirty = key != preview.of || footing_changed;
     if reach_dirty {
         preview.reach = if let (Some(_), Some((_, unit, _, standing, body, _))) = (key, selection) {
-            let footing = Footing::from_tiles_with_object_occupancy(
+            let footing = footing_cache.get_or_build(
+                revision.0,
                 tiles.iter(),
                 &table,
                 *body,
@@ -718,7 +774,7 @@ fn redraw_overlays(
             );
             Some(Reach::with_occupancy(
                 standing.0,
-                &footing,
+                footing.as_ref(),
                 None,
                 &disclosed_occupancy,
                 *unit,
@@ -851,8 +907,8 @@ fn cap(
         // thing it exists to explain.
         Pickable::IGNORE,
         // Which surface this is marking. Keyed on the position and never on the tile
-        // entity: `apply_terrain_edits` despawns and respawns the entire grid on any
-        // accepted edit, so every tile `Entity` id is invalidated by a single dig.
+        // entity: `apply_terrain_edits` replaces the affected chunk on an accepted
+        // edit, invalidating every tile `Entity` id in that chunk.
         standing.pos,
     )
 }
@@ -885,6 +941,61 @@ mod tests {
     use super::*;
     use hex_core::{HexCoord, HexSpan};
     use hex_test_app::HeadlessAppBuilder;
+
+    #[test]
+    fn batch_out_without_hit_coordinates_clears_only_its_exact_hover() {
+        let mut app = App::new();
+        app.init_resource::<HoveredSurface>()
+            .add_observer(on_tile_unhovered);
+        let position = TilePos::new(HexCoord::ORIGIN, 3);
+        let logical = app.world_mut().spawn_empty().id();
+        let batch = app
+            .world_mut()
+            .spawn(TerrainRenderBatch::new(
+                hex_core::TerrainChunkRoot { q: 0, r: 0 },
+                hex_core::SubstanceId(1),
+                vec![hex_core::TerrainPickRun::new(
+                    logical,
+                    position,
+                    HexSpan::new(0.0, 1.6),
+                )],
+            ))
+            .id();
+        let window = app.world_mut().spawn(Window::default()).id();
+        let target = bevy::window::WindowRef::Entity(window)
+            .normalize(Some(window))
+            .expect("the fixture window should normalize");
+        let location = bevy::picking::pointer::Location {
+            target: bevy::camera::NormalizedRenderTarget::Window(target),
+            position: Vec2::ZERO,
+        };
+        let out = || Out {
+            hit: bevy::picking::backend::HitData::new(batch, 0.0, None, None),
+        };
+
+        app.world_mut().resource_mut::<HoveredSurface>().0 = Some(position);
+        app.world_mut().trigger(Pointer::new(
+            bevy::picking::pointer::PointerId::Mouse,
+            location.clone(),
+            out(),
+            batch,
+        ));
+        assert_eq!(app.world().resource::<HoveredSurface>().0, None);
+
+        let newer_hover = TilePos::new(HexCoord::from_axial(1, 0), 3);
+        app.world_mut().resource_mut::<HoveredSurface>().0 = Some(newer_hover);
+        app.world_mut().trigger(Pointer::new(
+            bevy::picking::pointer::PointerId::Mouse,
+            location,
+            out(),
+            batch,
+        ));
+        assert_eq!(
+            app.world().resource::<HoveredSurface>().0,
+            Some(newer_hover),
+            "a late Out from the previous batch erased a newer exact hover"
+        );
+    }
 
     fn standing_at(position: TilePos) -> StandsOn {
         StandsOn(Standing {

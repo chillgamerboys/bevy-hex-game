@@ -1,0 +1,1 @@
+Implement the corresponding ownership lane in manifest.md against its locked decisions. Escalate source disagreement; no independent world/gameplay authority. Focused checks only; coordinator owns combined compilation.

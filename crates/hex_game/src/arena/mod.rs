@@ -1,20 +1,39 @@
 //! Native composition for isolated Battle Mode, launched through the menu or `--arena`.
 
+mod bootstrap;
+mod cast_input;
 mod encounter;
+mod environment;
+mod expedition;
+mod expedition_capture;
+#[cfg(all(test, feature = "test-support"))]
+mod expedition_route_tests;
+#[cfg(all(test, feature = "test-support"))]
+mod forest_tests;
+mod glider_visual;
+mod marine_visual;
 #[cfg(feature = "test-support")]
 pub use encounter::{configure_encounter_stress_tuning, stress_target_pose, STRESS_VISIT_TICKS};
 mod golem;
+mod grand;
+mod grand_lighting;
+mod grand_motion;
 mod hud;
+mod northern;
 mod presentation;
+mod readability_capture;
+mod recording;
 mod spectator;
 #[cfg(test)]
 mod tests;
+mod ux;
+mod water_lab;
 mod wisp;
 mod worm;
 mod worm_capture;
 
 use bevy::camera::RenderTarget;
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::input::mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::{CursorGrabMode, CursorMoved, CursorOptions, PrimaryWindow};
@@ -31,12 +50,19 @@ const HEIGHT: u32 = 900;
 const FIXED_SECONDS: f64 = 1.0 / 120.0;
 
 fn launch_selection(map: Option<&str>, encounter: Option<&str>) -> Result<ArenaSelection, String> {
-    let map = match map.unwrap_or("fort") {
+    let map = match map.unwrap_or("forest-massif") {
         "duel" => ArenaMap::Duel,
         "fort" => ArenaMap::Fort,
         "seven-regions" => ArenaMap::SevenRegions,
+        "forest-massif" => ArenaMap::ForestMassif,
+        "northern-archipelago" => ArenaMap::NorthernArchipelago,
+        "water-lab" => ArenaMap::WaterLab,
+        "grand-v4" => ArenaMap::GrandV4,
         value => return Err(format!("Unknown arena map: {value}")),
     };
+    if map == ArenaMap::ForestMassif && encounter.is_some_and(|value| value != "dragon") {
+        return Err("Forest Massif has a fixed authored enemy roster.".into());
+    }
     let encounter = match encounter.unwrap_or(if map == ArenaMap::Duel {
         "shadow"
     } else {
@@ -130,6 +156,10 @@ fn map_name(map: ArenaMap) -> &'static str {
         ArenaMap::Duel => "Duel",
         ArenaMap::Fort => "Fort",
         ArenaMap::SevenRegions => "Seven Regions",
+        ArenaMap::ForestMassif => "Forest Massif",
+        ArenaMap::NorthernArchipelago => "Northern Archipelago",
+        ArenaMap::WaterLab => "Water Lab",
+        ArenaMap::GrandV4 => "Grand V4",
     }
 }
 
@@ -142,8 +172,46 @@ fn encounter_name(encounter: ArenaEncounter) -> &'static str {
     }
 }
 
+// Two million retained f64 values use about 16 MiB, allocated only as frames arrive.
+// The simulation trace is diagnostic context, separate from wall-frame percentiles.
+const FRAME_TIMING_SAMPLE_LIMIT: usize = 1_000_000;
+const SIMULATION_TIMING_SAMPLE_LIMIT: usize = 36_000;
+
+#[derive(serde::Serialize)]
+struct TimingSeriesCoverage {
+    sample_limit: usize,
+    observed_samples: u64,
+    retained_samples: usize,
+    dropped_samples: u64,
+}
+
+impl TimingSeriesCoverage {
+    fn new(sample_limit: usize, observed_samples: u64, retained_samples: usize) -> Self {
+        Self {
+            sample_limit,
+            observed_samples,
+            retained_samples,
+            dropped_samples: observed_samples
+                .saturating_sub(u64::try_from(retained_samples).unwrap_or(u64::MAX)),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct FrameTimingCoverage {
+    elapsed_wall_ms: f64,
+    retained_wall_ms: f64,
+    engine: TimingSeriesCoverage,
+    wall: TimingSeriesCoverage,
+    simulation: TimingSeriesCoverage,
+    full_session_frame_percentiles_allowed: bool,
+}
+
 #[derive(Resource)]
 struct ViewState {
+    forest_preparation: bootstrap::Preparation,
+    northern_preparation: bootstrap::Preparation,
+    grand_preparation: bootstrap::Preparation,
     started: bool,
     paused: bool,
     third_person: bool,
@@ -152,20 +220,29 @@ struct ViewState {
     pitch: f32,
     initialized: bool,
     previews: [bool; 2],
+    fireball_guide_seen: bool,
     suppress_click: bool,
+    reconcile_cast: bool,
+    casts: cast_input::CastInput,
+    suppress_high_jump: bool,
     capture: Option<PathBuf>,
     capture_view: String,
+    capture_settle_frames: u32,
     image: Option<Handle<Image>>,
     frames: u32,
     requested: bool,
     accumulator: f64,
     reset_seen: u64,
     frame_times: Vec<f64>,
+    frame_timing_samples: u64,
+    frame_timing_started_at: Option<std::time::Instant>,
     simulation_frame_times: Vec<f64>,
+    simulation_timing_samples: u64,
     app_started_at: std::time::Instant,
     previous_frame_at: Option<std::time::Instant>,
     frame_wall_intervals: Vec<f64>,
     capture_ready_elapsed_ms: Option<f64>,
+    capture_surface_sample: Option<hex_map::arena::streamed::GrandSurfaceSampleSnapshot>,
     step_offset: f32,
     tick_times: Vec<(u64, bool, f64)>,
     capture_inputs: Vec<(u32, ActorIntent)>,
@@ -176,7 +253,7 @@ struct ViewState {
     capture_route_step: usize,
     capture_approach_frame: Option<u32>,
     capture_composition_frame: Option<u32>,
-    capture_subjects: Vec<u8>,
+    capture_subjects: Vec<hex_arena::ActorId>,
     capture_observer_inputs: Vec<spectator::CameraSample>,
     capture_wisp_nominal_hp: Option<f32>,
     capture_wisp_config_loaded: bool,
@@ -191,9 +268,22 @@ impl Default for ViewState {
     fn default() -> Self {
         let capture = std::env::var_os("HEX_ARENA_CAPTURE").map(PathBuf::from);
         let capture_view = std::env::var("HEX_ARENA_VIEW").unwrap_or_else(|_| "first".into());
+        let capture_settle_frames = capture
+            .as_ref()
+            .and_then(|_| {
+                std::env::var("HEX_ARENA_CAPTURE_SETTLE_FRAMES")
+                    .ok()?
+                    .parse::<u32>()
+                    .ok()
+            })
+            .unwrap_or(4)
+            .clamp(4, 600);
         let started =
             capture.is_some() && !matches!(capture_view.as_str(), "start" | "observer-start");
         Self {
+            forest_preparation: Default::default(),
+            northern_preparation: Default::default(),
+            grand_preparation: Default::default(),
             started,
             paused: !started,
             third_person: false,
@@ -202,20 +292,29 @@ impl Default for ViewState {
             pitch: 0.0,
             initialized: false,
             previews: [true, false],
+            fireball_guide_seen: false,
             suppress_click: true,
+            reconcile_cast: false,
+            casts: Default::default(),
+            suppress_high_jump: true,
             capture,
             capture_view,
+            capture_settle_frames,
             image: None,
             frames: 0,
             requested: false,
             accumulator: 0.0,
             reset_seen: 0,
             frame_times: Vec::new(),
+            frame_timing_samples: 0,
+            frame_timing_started_at: None,
             simulation_frame_times: Vec::new(),
+            simulation_timing_samples: 0,
             app_started_at: std::time::Instant::now(),
             previous_frame_at: None,
             frame_wall_intervals: Vec::new(),
             capture_ready_elapsed_ms: None,
+            capture_surface_sample: None,
             step_offset: 0.0,
             tick_times: Vec::new(),
             capture_inputs: Vec::new(),
@@ -241,32 +340,87 @@ impl Default for ViewState {
 
 impl ViewState {
     fn record_frame_timing(&mut self, now: std::time::Instant, engine_delta: f64) {
-        if self.frame_times.len() < 36_000 {
+        self.frame_timing_started_at.get_or_insert(now);
+        self.frame_timing_samples = self.frame_timing_samples.saturating_add(1);
+        if self.frame_times.len() < FRAME_TIMING_SAMPLE_LIMIT {
             self.frame_times.push(engine_delta * 1000.0);
         }
         if let Some(previous) = self.previous_frame_at.replace(now) {
-            if self.frame_wall_intervals.len() < 36_000 {
+            if self.frame_wall_intervals.len() < FRAME_TIMING_SAMPLE_LIMIT {
                 self.frame_wall_intervals
                     .push(now.saturating_duration_since(previous).as_secs_f64() * 1000.0);
             }
         }
     }
 
+    fn record_simulation_frame_timing(&mut self, milliseconds: f64) {
+        self.simulation_timing_samples = self.simulation_timing_samples.saturating_add(1);
+        if self.simulation_frame_times.len() < SIMULATION_TIMING_SAMPLE_LIMIT {
+            self.simulation_frame_times.push(milliseconds);
+        }
+    }
+
+    fn frame_timing_coverage(&self) -> FrameTimingCoverage {
+        let engine = TimingSeriesCoverage::new(
+            FRAME_TIMING_SAMPLE_LIMIT,
+            self.frame_timing_samples,
+            self.frame_times.len(),
+        );
+        let wall = TimingSeriesCoverage::new(
+            FRAME_TIMING_SAMPLE_LIMIT,
+            self.frame_timing_samples.saturating_sub(1),
+            self.frame_wall_intervals.len(),
+        );
+        let full_session_frame_percentiles_allowed =
+            wall.observed_samples > 0 && engine.dropped_samples == 0 && wall.dropped_samples == 0;
+        FrameTimingCoverage {
+            elapsed_wall_ms: self
+                .previous_frame_at
+                .zip(self.frame_timing_started_at)
+                .map_or(0.0, |(last, first)| {
+                    last.saturating_duration_since(first).as_secs_f64() * 1000.0
+                }),
+            retained_wall_ms: self.frame_wall_intervals.iter().sum(),
+            engine,
+            wall,
+            simulation: TimingSeriesCoverage::new(
+                SIMULATION_TIMING_SAMPLE_LIMIT,
+                self.simulation_timing_samples,
+                self.simulation_frame_times.len(),
+            ),
+            full_session_frame_percentiles_allowed,
+        }
+    }
+
     fn begin_play(&mut self) {
+        self.forest_preparation.cancel_selection();
+        self.northern_preparation.cancel_selection();
+        self.grand_preparation.cancel_selection();
         self.started = true;
         self.paused = false;
+        self.reconcile_cast = true;
         self.suppress_click = true;
+        self.casts.clear();
+        self.suppress_high_jump = true;
         self.accumulator = 0.0;
     }
 
     fn pause(&mut self) {
         self.paused = true;
         self.suppress_click = true;
+        self.casts.clear();
+        self.suppress_high_jump = true;
         self.accumulator = 0.0;
     }
 
     fn prepare_round(&mut self) {
+        self.forest_preparation.cancel_selection();
+        self.northern_preparation.cancel_selection();
+        self.grand_preparation.cancel_selection();
         self.started = false;
+        self.previews = [true, false];
+        self.fireball_guide_seen = false;
+        self.casts = Default::default();
         self.initialized = false;
         self.observer.generation = None;
         self.capture_event_frame = None;
@@ -287,6 +441,7 @@ impl ViewState {
 
     fn external_camera(&self) -> bool {
         self.capture.is_some()
+            && !grand_motion::is_view(&self.capture_view)
             && !matches!(
                 self.capture_view.as_str(),
                 "first" | "third" | "tuning" | "start" | "terminal-win" | "terminal-defeat"
@@ -358,8 +513,17 @@ pub fn run() -> AppExit {
         eprintln!("{error}");
         return AppExit::error();
     }
+    if let Err(error) = bootstrap::prepare_default(selection.map) {
+        eprintln!("{error}");
+        return AppExit::error();
+    }
     let mut app = App::new();
+    if let Err(error) = grand_motion::install(&mut app, &state, selection.map) {
+        eprintln!("{error}");
+        return AppExit::error();
+    }
     let plugins = DefaultPlugins.set(WindowPlugin {
+        close_when_requested: false,
         primary_window: Some(Window {
             title: "Hex — Spell Arena".into(),
             resolution: bevy::window::WindowResolution::new(WIDTH, HEIGHT)
@@ -382,6 +546,15 @@ pub fn run() -> AppExit {
     } else {
         app.add_plugins(plugins);
     }
+    recording::install(&mut app);
+    ux::install(&mut app);
+    environment::install(&mut app);
+    northern::install(&mut app);
+    water_lab::install(&mut app);
+    glider_visual::install(&mut app);
+    marine_visual::install(&mut app);
+    grand::install(&mut app);
+    grand_lighting::install(&mut app);
     app.init_resource::<worm_capture::Evidence>()
         .insert_resource(state)
         .insert_resource(selection)
@@ -423,6 +596,7 @@ pub fn run() -> AppExit {
                 setup,
                 hud::setup,
                 presentation::setup_effects,
+                expedition::setup,
                 encounter::setup,
                 golem::setup,
                 wisp::setup,
@@ -437,6 +611,8 @@ pub fn run() -> AppExit {
             (
                 worm_capture::inject_reset_key,
                 input,
+                ux::keyboard,
+                ux::controls,
                 hud::buttons,
                 sync_cursor,
             )
@@ -444,6 +620,7 @@ pub fn run() -> AppExit {
                 .in_set(ArenaFrame::Input),
         )
         .add_systems(Update, drive_simulation.in_set(ArenaFrame::Tick))
+        .add_systems(Update, update_map_lighting.before(ArenaFrame::Present))
         .add_systems(
             Update,
             (worm_capture::observe, worm_capture::progress)
@@ -466,13 +643,19 @@ pub fn run() -> AppExit {
                 presentation::effects,
                 presentation::solid_effects,
                 encounter::effects,
+                expedition::present,
                 hud::update,
                 log_round,
             )
                 .chain()
                 .in_set(ArenaFrame::Present),
         )
-        .add_systems(Update, capture_frame.in_set(ArenaFrame::Capture));
+        .add_systems(
+            Update,
+            (snapshot_surface_sample_capture, capture_frame)
+                .chain()
+                .in_set(ArenaFrame::Capture),
+        );
     app.run()
 }
 
@@ -551,7 +734,6 @@ fn setup(
         };
         tuning.shield_size = size;
         tuning.fireball_size = size;
-        tuning.blast_size = size;
         state.third_person =
             state.capture_view == "third" || state.capture_view.ends_with("-third");
     }
@@ -569,6 +751,7 @@ fn setup(
     };
     commands.spawn((
         Camera3d::default(),
+        bevy::camera::ShadowLodOrigin,
         IsDefaultUiCamera,
         Camera {
             clear_color: ClearColorConfig::Default,
@@ -578,7 +761,7 @@ fn setup(
         Projection::Perspective(PerspectiveProjection {
             fov: 75.0_f32.to_radians(),
             near: 0.035,
-            far: 480.0,
+            far: 24_000.0,
             ..default()
         }),
         Transform::from_xyz(0.0, 6.0, 15.0).looking_at(Vec3::new(0.0, 3.0, 0.0), Vec3::Y),
@@ -595,7 +778,7 @@ fn setup(
         Transform::from_xyz(-15.0, 30.0, 18.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     info!(
-        "Spell arena ready; Enter starts. Escape/Tab pauses and frees the mouse. Hold LMB to charge Shield/Fireball; release LMB to cast any spell. Controls WASD mouse Space Shift 1/2/3 C T R."
+        "Spell arena ready; Enter starts. Escape/Tab pauses and frees the mouse. Hold/release LMB for Fireball or RMB for Shield. E triggers High Jump. Controls WASD mouse Space E C T R; no sprint."
     );
 }
 
@@ -615,9 +798,78 @@ fn reset_from_input(
     state.prepare_round();
 }
 
+fn update_map_lighting(
+    mut commands: Commands,
+    selection: Res<ArenaSelection>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+    mut clear: ResMut<ClearColor>,
+    mut lights: Query<(&mut DirectionalLight, &mut Transform), Without<ArenaCamera>>,
+    cameras: Query<Entity, With<ArenaCamera>>,
+    mut was_forest: Local<bool>,
+) {
+    if !selection.is_changed() {
+        return;
+    }
+    let forest = selection.map.capabilities().natural_environment;
+    if !forest && !*was_forest {
+        return;
+    }
+    *was_forest = forest;
+    ambient.color = if forest {
+        Color::srgb(0.90, 0.94, 1.0)
+    } else {
+        Color::srgb(0.77, 0.85, 1.0)
+    };
+    ambient.brightness = if forest { 1_100.0 } else { 420.0 };
+    clear.0 = if forest {
+        Color::srgb(0.54, 0.75, 0.90)
+    } else {
+        Color::srgb(0.10, 0.16, 0.22)
+    };
+    for (mut light, mut transform) in &mut lights {
+        light.illuminance = if forest { 6_000.0 } else { 18_000.0 };
+        light.color = if forest {
+            Color::srgb(1.0, 0.92, 0.80)
+        } else {
+            Color::WHITE
+        };
+        let origin = if forest {
+            if matches!(
+                selection.map,
+                ArenaMap::NorthernArchipelago | ArenaMap::GrandV4
+            ) {
+                northern::sun_direction()
+            } else {
+                environment::sun_direction()
+            }
+        } else {
+            Vec3::new(-15.0, 30.0, 18.0)
+        };
+        *transform = Transform::from_translation(origin).looking_at(Vec3::ZERO, Vec3::Y);
+    }
+    for entity in &cameras {
+        if forest {
+            commands.entity(entity).insert((
+                bevy::camera::Exposure { ev100: 9.5 },
+                DistanceFog {
+                    color: Color::srgb(0.62, 0.72, 0.82),
+                    directional_light_color: Color::srgb(1.0, 0.78, 0.50),
+                    directional_light_exponent: 8.0,
+                    falloff: FogFalloff::Exponential { density: 0.0003 },
+                },
+            ));
+        } else {
+            commands
+                .entity(entity)
+                .remove::<(bevy::camera::Exposure, DistanceFog)>();
+        }
+    }
+}
+
 fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    mut buttons: MessageReader<MouseButtonInput>,
     mut moved: MessageReader<CursorMoved>,
     mut wheel: MessageReader<MouseWheel>,
     time: Res<Time>,
@@ -626,11 +878,20 @@ fn input(
     mut session: ResMut<ArenaSession>,
     mut intent: ResMut<ArenaInput>,
     mut reset: ResMut<ArenaReset>,
+    render: Option<Res<hex_core::arena::ArenaRenderStatus>>,
+    ui: Option<Res<ux::UxState>>,
+    grand: Option<ResMut<grand::State>>,
+    selection: Option<Res<ArenaSelection>>,
 ) {
+    let mut grand = grand;
+    let grand_selected = selection.as_ref().map_or_else(
+        || session.is_grand_run(),
+        |selection| selection.map == ArenaMap::GrandV4,
+    );
+    let terrain_ready = render.is_none_or(|status| status.pending_chunks == 0);
+    let mouse_events = buttons.read().copied().collect::<Vec<_>>();
     if state.capture.is_some() {
-        if state.capture_view == "encounter-worm-reset"
-            && state.started
-            && keys.just_pressed(KeyCode::KeyR)
+        if state.capture_view == "encounter-worm-reset" && state.started && restart_shortcut(&keys)
         {
             reset_from_input(&mut state, &mut session, &mut intent, &mut reset);
         }
@@ -643,7 +904,9 @@ fn input(
         wheel.clear();
         state.pause();
         intent.human = ActorIntent::default();
-        session.cancel_charges();
+        if !session.is_grand_run() {
+            session.cancel_charges();
+        }
         return;
     };
     let observing = spectator::active(&session);
@@ -660,25 +923,55 @@ fn input(
     if !window.focused {
         state.pause();
     }
-    if window.focused && !state.started && keys.just_pressed(KeyCode::Enter) {
-        session.cancel_charges();
-        intent.human = ActorIntent::default();
-        state.begin_play();
+    if terrain_ready
+        && window.focused
+        && !state.started
+        && keys.just_pressed(KeyCode::Enter)
+        && ui.is_none_or(|ui| !ui.has_menu_focus())
+    {
+        if grand_selected {
+            if let Some(grand) = grand.as_mut() {
+                grand.request = Some(grand::Request::Primary);
+            }
+        } else {
+            if !session.is_grand_run() {
+                session.cancel_charges();
+            }
+            intent.human = ActorIntent::default();
+            state.begin_play();
+        }
     }
     if window.focused
         && state.started
         && (keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::Tab))
     {
-        session.cancel_charges();
+        if !session.is_grand_run() {
+            session.cancel_charges();
+        }
         intent.human = ActorIntent::default();
-        if state.paused && !session.is_finished() {
+        if grand.as_ref().is_some_and(|grand| grand.confirmation) {
+            if let Some(grand) = grand.as_mut() {
+                grand.request = Some(grand::Request::CancelNew);
+            }
+        } else if state.paused
+            && !session.is_finished()
+            && terrain_ready
+            && !grand.as_ref().is_some_and(|grand| grand.busy())
+        {
             state.begin_play();
         } else {
             state.pause();
         }
     }
-    if window.focused && state.started && keys.just_pressed(KeyCode::KeyR) {
-        reset_from_input(&mut state, &mut session, &mut intent, &mut reset);
+    if window.focused && state.started && restart_shortcut(&keys) {
+        if session.is_grand_run() {
+            state.pause();
+            if let Some(grand) = grand.as_mut() {
+                grand.request_new();
+            }
+        } else {
+            reset_from_input(&mut state, &mut session, &mut intent, &mut reset);
+        }
     }
     if window.focused
         && state.started
@@ -745,7 +1038,9 @@ fn input(
         }
         if !active {
             state.suppress_click = true;
-            session.cancel_charges();
+            if !session.is_grand_run() {
+                session.cancel_charges();
+            }
         }
         if !mouse.pressed(MouseButton::Left) && active {
             state.suppress_click = false;
@@ -754,14 +1049,15 @@ fn input(
     }
     if !active {
         state.suppress_click = true;
-        session.cancel_charges();
+        if !session.is_grand_run() {
+            session.cancel_charges();
+        }
         intent.human = ActorIntent::default();
         return;
     }
     let direction = aim(&state);
     let current_aim = session.actors.first().map_or(direction, |actor| {
-        let eye = actor.eye();
-        let camera = camera_origin(&session, &state, eye, direction);
+        let camera = camera_origin(&session, &state, actor, direction);
         session.aim_from_camera(actor.id, camera, direction)
     });
     let axis = |positive, negative| {
@@ -771,64 +1067,83 @@ fn input(
         axis(KeyCode::KeyD, KeyCode::KeyA),
         axis(KeyCode::KeyW, KeyCode::KeyS),
     );
-    intent.human.run = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    intent.human.run = false;
     intent.human.jump |= keys.just_pressed(KeyCode::Space);
-    for (key, spell) in [
-        (KeyCode::Digit1, Spell::Shield),
-        (KeyCode::Digit2, Spell::Fireball),
-        (KeyCode::Digit3, Spell::AreaBlast),
-    ] {
-        if keys.just_pressed(key) {
-            if session
-                .actors
-                .first()
-                .is_some_and(|actor| actor.selected != spell)
-            {
-                // Selection cancels the old spell in authority. Discard old queued
-                // edges here as well, including when this render frame has no tick.
-                let existing_hold = intent.human.cast_pressed
-                    || intent.human.cast_held
-                    || session
-                        .actors
-                        .first()
-                        .is_some_and(|actor| actor.charge().is_some());
-                intent.human.cast_pressed = false;
-                intent.human.cast_released = false;
-                if existing_hold {
-                    state.suppress_click = true;
-                }
-            }
-            intent.human.selected = Some(spell);
+    intent.human.high_jump |= keys.just_pressed(KeyCode::KeyE) && !state.suppress_high_jump;
+    if !keys.pressed(KeyCode::KeyE) {
+        state.suppress_high_jump = false;
+    }
+    intent.human.glider_look = direction;
+    intent.human.glider_toggle |= keys.just_pressed(KeyCode::KeyG);
+    intent.human.flight_toggle |= keys.just_pressed(KeyCode::KeyF);
+    intent.human.boat_toggle |= keys.just_pressed(KeyCode::KeyB);
+    intent.human.teleport |= keys.just_pressed(KeyCode::KeyX);
+    intent.human.interact |= keys.just_pressed(KeyCode::KeyR) && !restart_shortcut(&keys);
+    intent.human.flight_vertical = f32::from(u8::from(keys.pressed(KeyCode::Space)))
+        - f32::from(u8::from(
+            keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
+        ));
+    intent.human.flight_fast =
+        keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    intent.human.aim = current_aim;
+    if state.reconcile_cast && session.is_grand_run() {
+        state.reconcile_cast = false;
+        if let Some(spell) = session
+            .human_actor_id()
+            .and_then(|id| session.actors.iter().find(|actor| actor.id == id))
+            .and_then(hex_arena::Actor::resume_cast_spell)
+        {
+            let held = match spell {
+                Spell::Fireball => mouse.pressed(MouseButton::Left),
+                Spell::Shield => mouse.pressed(MouseButton::Right),
+                Spell::HighJump => false,
+            };
+            state.casts.resume_existing(spell, held, current_aim);
+            state.suppress_click = false;
         }
     }
-    // A queued release owns its release-frame aim until physics consumes it.
-    // Selection and menu cancellation clear the edge, restoring current aim.
+    if state.suppress_click {
+        state.casts.clear();
+        if !mouse.pressed(MouseButton::Left) && !mouse.pressed(MouseButton::Right) {
+            state.suppress_click = false;
+        }
+        intent.human.cast_pressed = false;
+        intent.human.cast_released = false;
+        intent.human.cast_held = false;
+    } else {
+        state.casts.observe(&mouse, &mouse_events, current_aim);
+        state.casts.write(&mut intent.human);
+    }
+    // Assistance follows the gesture sampled above, even before a physics tick.
+    let guide_unlocked = session
+        .progress()
+        .is_none_or(|progress| progress.fireball_guide_unlocked);
+    if session
+        .progress()
+        .is_some_and(|progress| progress.fireball_guide_unlocked)
+        && !state.fireball_guide_seen
+    {
+        state.fireball_guide_seen = true;
+        if let Some(enabled) = state.previews.get_mut(1) {
+            *enabled = true;
+        }
+    }
     if window.focused && state.started && !state.paused && keys.just_pressed(KeyCode::KeyT) {
-        let spell = intent
-            .human
-            .selected
-            .or_else(|| session.actors.first().map(|actor| actor.selected))
-            .unwrap_or(Spell::Shield);
+        let spell = state.casts.spell();
         let slot = match spell {
             Spell::Shield => Some(0),
-            Spell::Fireball => Some(1),
-            Spell::AreaBlast => None,
+            Spell::Fireball if guide_unlocked => Some(1),
+            Spell::Fireball | Spell::HighJump => None,
         };
         if let Some(enabled) = slot.and_then(|slot| state.previews.get_mut(slot)) {
             *enabled = !*enabled;
         }
     }
-    if !intent.human.cast_released {
-        intent.human.aim = current_aim;
-    }
-    // A press and release can both arrive before the next 120 Hz tick. Preserve
-    // both edges while replacing only the current held sample each render frame.
-    intent.human.cast_pressed |= mouse.just_pressed(MouseButton::Left) && !state.suppress_click;
-    intent.human.cast_released |= mouse.just_released(MouseButton::Left) && !state.suppress_click;
-    intent.human.cast_held = mouse.pressed(MouseButton::Left) && !state.suppress_click;
-    if !mouse.pressed(MouseButton::Left) {
-        state.suppress_click = false;
-    }
+}
+
+fn restart_shortcut(keys: &ButtonInput<KeyCode>) -> bool {
+    keys.just_pressed(KeyCode::KeyR)
+        && (keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight))
 }
 
 // UI buttons run after input. Synchronize the cursor again so Start/Resume take
@@ -856,6 +1171,13 @@ fn drive_simulation(world: &mut World) {
     let reset_this_frame = world.resource::<ViewState>().reset_seen != generation;
     let capture = world.resource::<ViewState>().capture.is_some();
     let needs_initialization = world.resource::<ViewState>().frames == 0;
+    if reset_this_frame && !capture {
+        let mut state = world.resource_mut::<ViewState>();
+        state.casts = Default::default();
+        state.suppress_click = true;
+        state.suppress_high_jump = true;
+        world.resource_mut::<ArenaInput>().human = ActorIntent::default();
+    }
     let (steps, frame, view) = {
         let mut state = world.resource_mut::<ViewState>();
         state.frames = state.frames.saturating_add(1);
@@ -899,7 +1221,16 @@ fn drive_simulation(world: &mut World) {
             .actors
             .first()
             .map_or(Vec3::X, |actor| actor.aim);
-        let sample = if observer || encounter::stress_view(&view) {
+        let sample = if grand_motion::is_view(&view) {
+            match grand_motion::input(world) {
+                Ok(intent) => intent,
+                Err(error) => {
+                    error!("Grand motion failed: {error}");
+                    world.write_message(AppExit::error());
+                    return;
+                }
+            }
+        } else if observer || encounter::stress_view(&view) {
             ActorIntent::default()
         } else if view.starts_with("encounter-") && view != "encounter-landmark" {
             let mut route_step = world.resource::<ViewState>().capture_route_step;
@@ -930,7 +1261,10 @@ fn drive_simulation(world: &mut World) {
                 world.resource::<ArenaTuning>(),
             )
         } else {
-            capture_intent(frame, &view, world.resource::<ArenaTuning>(), direction)
+            let tuning = world
+                .resource::<ArenaSession>()
+                .player_tuning(world.resource::<ArenaTuning>());
+            capture_intent(frame, &view, &tuning, direction)
         };
         world.resource_mut::<ArenaInput>().human = sample;
         world
@@ -948,6 +1282,24 @@ fn drive_simulation(world: &mut World) {
                 }
             }
         }
+        if let Err(error) = northern::stage_boat_capture(world, &view) {
+            error!("Northern boat presentation fixture failed: {error}");
+            world.resource_mut::<ViewState>().requested = true;
+            world.write_message(AppExit::error());
+            return;
+        }
+        if let Err(error) = expedition_capture::stage(world, frame, &view) {
+            error!("Expedition presentation fixture failed: {error}");
+            world.resource_mut::<ViewState>().requested = true;
+            world.write_message(AppExit::error());
+            return;
+        }
+        if let Err(error) = readability_capture::stage(world, frame, &view) {
+            error!("World readability fixture failed: {error}");
+            world.resource_mut::<ViewState>().requested = true;
+            world.write_message(AppExit::error());
+            return;
+        }
         if frame == 80 && view.contains("partial-preview") {
             stage_partial_preview(world);
         }
@@ -958,10 +1310,13 @@ fn drive_simulation(world: &mut World) {
     let frozen = world.resource::<ViewState>().paused || !world.resource::<ViewState>().started;
     let bot_enabled = world.resource::<ArenaSession>().bot_enabled;
     if frozen {
+        world.resource_mut::<ViewState>().casts.clear();
         // A single setup/reset tick publishes the complete world and actors.
         // It must not consume player input or advance the bot's reaction clock.
         world.resource_mut::<ArenaInput>().human = ActorIntent::default();
-        world.resource_mut::<ArenaSession>().cancel_charges();
+        if !world.resource::<ArenaSession>().is_grand_run() {
+            world.resource_mut::<ArenaSession>().cancel_charges();
+        }
         world.resource_mut::<ArenaSession>().bot_enabled = false;
     }
     for _ in 0..steps {
@@ -973,8 +1328,23 @@ fn drive_simulation(world: &mut World) {
         let before = world.resource::<ArenaTerrainView>().revision;
         let voxels_before = world.resource::<ArenaTerrainView>().voxels.len();
         let outcomes_before = world.resource::<ArenaSession>().terrain_outcomes;
+        let managed = !capture
+            && !frozen
+            && !spectator::active(world.resource::<ArenaSession>())
+            && world.resource::<ViewState>().casts.managed;
+        if managed {
+            let mut sample = world.resource::<ArenaInput>().human;
+            world.resource::<ViewState>().casts.write(&mut sample);
+            world.resource_mut::<ArenaInput>().human = sample;
+        }
         let started = std::time::Instant::now();
+        let tick_before_step = world.resource::<ArenaSession>().tick;
         world.run_schedule(ArenaTick);
+        // A streamed-terrain wait publishes world data without consuming a
+        // gameplay gesture. Keep its edge queued until a real simulation tick.
+        if managed && world.resource::<ArenaSession>().tick > tick_before_step {
+            world.resource_mut::<ViewState>().casts.consume();
+        }
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         let changed = before != world.resource::<ArenaTerrainView>().revision;
         let tick = world.resource::<ArenaSession>().tick;
@@ -1074,6 +1444,43 @@ fn drive_simulation(world: &mut World) {
         let approach_ready = world.resource::<ArenaTerrainView>().selection.map != ArenaMap::Fort
             || encounter::fort_approach_complete(world.resource::<ViewState>().capture_route_step);
         if capture
+            && capture_charge_ready(
+                world.resource::<ArenaSession>(),
+                world.resource::<ArenaTuning>(),
+                &view,
+            )
+        {
+            // Keep the actual held charge stable while render assets warm up.
+            // Screenshot readiness may arrive long after the target input frame.
+            let mut state = world.resource_mut::<ViewState>();
+            state.capture_event_frame = Some(frame);
+            state.accumulator = 0.0;
+            break;
+        }
+        if capture && northern::boat_capture_ready(world.resource::<ArenaSession>(), &view) {
+            let mut state = world.resource_mut::<ViewState>();
+            state.capture_event_frame = Some(frame);
+            state.accumulator = 0.0;
+            break;
+        }
+        if capture && expedition_capture::ready(world.resource::<ArenaSession>(), &view) {
+            let mut state = world.resource_mut::<ViewState>();
+            state.capture_event_frame = Some(frame);
+            state.accumulator = 0.0;
+            break;
+        }
+        if capture
+            && readability_capture::ready(
+                world.get_resource::<readability_capture::ReadabilityCapture>(),
+                &view,
+            )
+        {
+            let mut state = world.resource_mut::<ViewState>();
+            state.capture_event_frame = Some(frame);
+            state.accumulator = 0.0;
+            break;
+        }
+        if capture
             && approach_ready
             && encounter::phase_ready(world.resource::<ArenaSession>(), &view)
             && worm::terrain_phase_ready(
@@ -1102,11 +1509,9 @@ fn drive_simulation(world: &mut World) {
         final_tick.saturating_sub(tick_before_frame)
     };
     let mut state = world.resource_mut::<ViewState>();
-    if state.simulation_frame_times.len() < 36_000 {
-        state
-            .simulation_frame_times
-            .push(f64::from(u32::try_from(ticks_advanced).unwrap_or(0)) * FIXED_SECONDS * 1000.0);
-    }
+    state.record_simulation_frame_timing(
+        f64::from(u32::try_from(ticks_advanced).unwrap_or(0)) * FIXED_SECONDS * 1000.0,
+    );
     show_terminal_menu(world);
 }
 
@@ -1151,8 +1556,6 @@ fn capture_intent(frame: u32, view: &str, tuning: &ArenaTuning, direction: Vec3)
         Some(Spell::Shield)
     } else if view.starts_with("fireball") {
         Some(Spell::Fireball)
-    } else if view.starts_with("blast") {
-        Some(Spell::AreaBlast)
     } else {
         None
     };
@@ -1168,10 +1571,9 @@ fn capture_intent(frame: u32, view: &str, tuning: &ArenaTuning, direction: Vec3)
         capture_frame_index(view)
             .saturating_sub((tuning.charge_seconds * 0.5 * 60.0).round() as u32)
             .saturating_add(1)
+            .max(6)
     } else if hold_review || spell == Some(Spell::Shield) {
         6
-    } else if spell == Some(Spell::AreaBlast) {
-        release_frame
     } else {
         release_frame.saturating_sub(reference_frames).max(3)
     };
@@ -1183,11 +1585,44 @@ fn capture_intent(frame: u32, view: &str, tuning: &ArenaTuning, direction: Vec3)
             direction
         },
         selected: (frame == 3).then_some(spell).flatten(),
+        high_jump: view.starts_with("high-jump") && frame == 48,
         cast_pressed: casts && frame == press_frame,
         cast_released: casts && !hold_review && frame == release_frame,
         cast_held: casts && frame >= press_frame && (hold_review || frame < release_frame),
         ..default()
     }
+}
+
+fn capture_charge_target(view: &str) -> Option<(Spell, f32)> {
+    let spell = if view.starts_with("shield-charge-") {
+        Spell::Shield
+    } else if view.starts_with("fireball-charge-") {
+        Spell::Fireball
+    } else {
+        return None;
+    };
+    if view.contains("charge-partial") {
+        Some((spell, 0.5))
+    } else if view.contains("charge-full") {
+        Some((spell, 1.0))
+    } else {
+        None
+    }
+}
+
+fn capture_charge_ready(session: &ArenaSession, tuning: &ArenaTuning, view: &str) -> bool {
+    let Some((spell, fraction)) = capture_charge_target(view) else {
+        return false;
+    };
+    let tuning = session.player_tuning(tuning);
+    session.human_actor_id().is_some_and(|id| {
+        session.actors.iter().any(|actor| {
+            actor.id == id
+                && actor.charge().is_some_and(|charge| {
+                    charge.spell == spell && charge.elapsed >= tuning.charge_seconds * fraction
+                })
+        })
+    })
 }
 
 fn capture_frame_index(view: &str) -> u32 {
@@ -1197,7 +1632,7 @@ fn capture_frame_index(view: &str) -> u32 {
         36
     } else if view.contains("charge-full") || view.contains("partial-preview") {
         90
-    } else if view.starts_with("blast") || view.starts_with("fireball") {
+    } else if view.starts_with("high-jump") || view.starts_with("fireball") {
         57
     } else {
         90
@@ -1250,16 +1685,33 @@ fn stage_partial_preview(world: &mut World) {
     }
 }
 
-fn camera_origin(session: &ArenaSession, state: &ViewState, eye: Vec3, direction: Vec3) -> Vec3 {
+fn camera_origin(
+    session: &ArenaSession,
+    state: &ViewState,
+    actor: &hex_arena::Actor,
+    direction: Vec3,
+) -> Vec3 {
+    let eye = actor.eye();
     let smoothed_eye = eye + Vec3::Y * state.step_offset;
+    let vehicle = actor.glider().is_some_and(|flight| flight.open)
+        || actor.boat().is_some_and(|boat| boat.active);
     let desired = if state.third_person {
-        smoothed_eye - direction * 1.25
-            + Vec3::Y * 0.38
+        smoothed_eye - direction * if vehicle { 5.0 } else { 2.4 }
+            + Vec3::Y * if vehicle { 1.2 } else { 0.55 }
             + direction.cross(Vec3::Y).normalize_or_zero() * 0.28
     } else {
         smoothed_eye
     };
     session.camera_position(eye, desired)
+}
+
+fn snapshot_surface_sample_capture(world: &mut World) {
+    let state = world.resource::<ViewState>();
+    if state.capture.is_none() || state.requested {
+        return;
+    }
+    let snapshot = hex_map::arena::streamed::surface_sample_snapshot(world);
+    world.resource_mut::<ViewState>().capture_surface_sample = snapshot;
 }
 
 fn capture_frame(
@@ -1271,8 +1723,8 @@ fn capture_frame(
     geometry: Res<hex_core::arena::ArenaVoxelGeometry>,
     game_assets: Option<Res<hex_assets::GameAssets>>,
     meshes: Res<Assets<Mesh>>,
-    objects: Query<&hex_assets::ObjectInstance>,
-    chunks: Query<&hex_objects::ObjectRenderChunk>,
+    objects: Query<Option<&Children>, With<hex_assets::ObjectInstance>>,
+    chunks: Query<&Mesh3d, With<hex_objects::ObjectRenderChunk>>,
     creature_meshes: (
         Query<&Mesh3d, With<golem::GolemPrism>>,
         Query<&Mesh3d, With<wisp::WispPrism>>,
@@ -1281,7 +1733,20 @@ fn capture_frame(
         Query<&Mesh3d, With<wisp::WispWindup>>,
     ),
     cameras: Query<&Transform, With<ArenaCamera>>,
-    liquid_clock: Option<Res<hex_map::LiquidVisualTime>>,
+    render_context: (
+        Option<Res<hex_map::LiquidVisualTime>>,
+        Option<Res<hex_core::arena::ArenaRenderStatus>>,
+        Option<Res<ux::UxState>>,
+        Option<Res<readability_capture::ReadabilityCapture>>,
+        Option<Res<hex_map::arena::streamed::StreamedArena>>,
+        Option<Res<hex_map::ocean::OceanRenderStatus>>,
+        Res<northern::NorthernPresentation>,
+        Res<hex_core::water_lab::WaterLabSettings>,
+        Res<hex_map::water_lab::WaterLabFrame>,
+        Res<ux::wind::field::FieldDisplay>,
+        Res<hex_map::ocean::OceanFrame>,
+        Res<hex_map::ocean::OceanSurfaceProfile>,
+    ),
     mut exit: MessageWriter<AppExit>,
     lighting: (Res<GlobalAmbientLight>, Query<&DirectionalLight>),
     worm_context: (
@@ -1291,19 +1756,66 @@ fn capture_frame(
         Res<hex_core::DamagedVoxels>,
     ),
 ) {
+    let (
+        liquid_clock,
+        render,
+        ui,
+        readability,
+        northern_world,
+        ocean_status,
+        northern_presentation,
+        lab_settings,
+        lab_frame,
+        wind_field,
+        ocean_frame,
+        ocean_profile,
+    ) = render_context;
+    if state.capture_view.starts_with("water-lab-motion")
+        || grand_motion::is_view(&state.capture_view)
+    {
+        return;
+    }
+    if !northern::capture_ready(
+        &state.capture_view,
+        &northern_presentation,
+        northern_world.as_deref(),
+        render.as_deref(),
+        ocean_status.as_deref(),
+    ) {
+        return;
+    }
     let Some(path) = state.capture.clone() else {
         return;
     };
-    if state.requested {
+    if state.requested
+        || render
+            .as_ref()
+            .is_some_and(|status| status.pending_chunks > 0)
+    {
         return;
     }
     let (golem_prisms, wisp_prisms, worm_prisms, boulders, wisp_windups) = creature_meshes;
     let object_count = objects.iter().count();
     let chunk_count = chunks.iter().count();
     let needs_objects = !view.static_spans.is_empty() || object_count > 0;
-    let authored_assets_ready = !needs_objects
+    let every_forest_object_ready = !session.is_forest_run()
+        || objects.iter().all(|children| {
+            children.is_some_and(|children| {
+                !children.is_empty()
+                    && children.iter().all(|child| {
+                        chunks
+                            .get(child)
+                            .is_ok_and(|mesh| meshes.get(&mesh.0).is_some())
+                    })
+            })
+        });
+    let authored_assets_ready = matches!(
+        view.selection.map,
+        ArenaMap::NorthernArchipelago | ArenaMap::GrandV4
+    ) || !needs_objects
         || (object_count > 0
             && chunk_count > 0
+            && every_forest_object_ready
             && game_assets
                 .as_ref()
                 .is_some_and(|assets| meshes.get(&assets.hex_tile).is_some()));
@@ -1406,6 +1918,36 @@ fn capture_frame(
         }
         return;
     }
+    if capture_charge_target(&state.capture_view).is_some() && state.capture_event_frame.is_none() {
+        if frames >= 1800 || session.is_finished() {
+            error!("Charge capture failed: requested authoritative held charge was not reached");
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
+    if expedition_capture::fixture_view(&state.capture_view)
+        && (state.capture_event_frame.is_none()
+            || !expedition_capture::ready(&session, &state.capture_view))
+    {
+        if state.frames >= 180 || session.is_finished() {
+            error!(snapshot = ?session.expedition_progress(), "Expedition synthetic capture failed: expected reward or fountain state was not reached");
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
+    if readability_capture::fixture_view(&state.capture_view)
+        && (state.capture_event_frame.is_none()
+            || !readability_capture::ready(readability.as_deref(), &state.capture_view))
+    {
+        if state.frames >= 180 {
+            error!("World readability capture did not reach its verified publication and camera");
+            state.requested = true;
+            exit.write(AppExit::error());
+        }
+        return;
+    }
     if encounter::phase_view(&state.capture_view) && state.capture_event_frame.is_none() {
         if state.frames >= 1800 || session.is_finished() {
             error!(
@@ -1479,18 +2021,24 @@ fn capture_frame(
     if state.frames < frame || state.requested {
         return;
     }
-    if state.capture_view == "encounter-landmark"
-        && !state
-            .capture_focus
-            .as_ref()
-            .is_some_and(|name| view.anchors.contains_key(name))
+    if matches!(
+        state.capture_view.as_str(),
+        "encounter-landmark"
+            | "forest-landmark"
+            | "forest-landmark-rear"
+            | "forest-ground"
+            | "forest-ground-rear"
+    ) && !state
+        .capture_focus
+        .as_ref()
+        .is_some_and(|name| encounter::forest_focus(&view, *geometry, name).is_some())
     {
         error!("Encounter capture requires a published focus anchor");
         state.requested = true;
         exit.write(AppExit::error());
         return;
     }
-    if frames < ready_frame.saturating_add(4) {
+    if frames < ready_frame.saturating_add(state.capture_settle_frames) {
         return;
     }
     if liquid_clock
@@ -1513,7 +2061,9 @@ fn capture_frame(
     };
     // Keep each macro bounded: a single large object exceeds serde_json's recursive
     // token parser limit as new capture evidence is added.
+    let player_tuning = session.player_tuning(&tuning);
     let actors = session.actors.iter().map(|actor| {
+        let charge_tuning = if session.human_actor_id() == Some(actor.id) { &player_tuning } else { &*tuning };
         let attack = actor.attack_state().map(|attack| serde_json::json!({
             "kind": attack.kind, "phase": attack.phase, "origin": attack.origin.to_array(),
             "direction": attack.direction.to_array(), "range": attack.range,
@@ -1521,8 +2071,8 @@ fn capture_frame(
         }));
         let charge = actor.charge().map(|charge| serde_json::json!({
             "spell": charge.spell, "elapsed": charge.elapsed,
-            "progress": (charge.elapsed / tuning.charge_seconds).clamp(0.0, 1.0),
-            "launch_speed": tuning.launch_speed(charge.elapsed)
+            "progress": (charge.elapsed / charge_tuning.charge_seconds).clamp(0.0, 1.0),
+            "launch_speed": charge_tuning.launch_speed(charge.elapsed)
         }));
         let body_hex_prisms = actor.body_hex_prisms().map(|prism| serde_json::json!({
             "offset": prism.offset.to_array(), "height": prism.height
@@ -1532,7 +2082,7 @@ fn capture_frame(
             "end": beam.end.to_array(), "radius": beam.radius, "tracking": beam.tracking
         }));
         serde_json::json!({
-            "id": actor.id, "species": actor.species, "team": actor.team,
+            "id": actor.id, "species": actor.species, "expedition_role": actor.expedition_role(), "team": actor.team,
             "party": actor.party, "hp": actor.hp, "max_hp": actor.max_hp,
             "feet": actor.feet.to_array(), "body_dimensions": actor.body_dimensions().to_array(),
             "body_center": actor.center().to_array(), "worm": actor.worm(),
@@ -1540,7 +2090,10 @@ fn capture_frame(
             "body_rotation": actor.body_rotation().to_array(), "cooldowns": actor.cooldowns,
             "attack": attack, "charge": charge, "body_hex_prisms": body_hex_prisms,
             "idle_mouth": actor.eye().to_array(), "beam": beam, "flying": actor.flying, "grounded": actor.grounded,
-            "flight_layer": actor.flight_layer()
+            "flight_layer": actor.flight_layer(),
+            "glider": actor.glider().map(|glider| serde_json::json!({"open":glider.open,"velocity":glider.velocity.to_array(),"airspeed":glider.airspeed,"direction":glider.direction.to_array(),"stall_fraction":glider.stall_fraction})),
+            "boat": actor.boat().map(|boat| serde_json::json!({"active":boat.active,"heading":boat.heading.to_array(),"velocity":boat.velocity.to_array(),"normal":boat.surface_normal.to_array(),"wind":boat.wind.to_array()})),
+            "swimming": actor.swimming().map(|swim| serde_json::json!({"active":swim.active,"oxygen_seconds":swim.oxygen_seconds,"submerged":swim.submerged}))
         })
     }).collect::<Vec<_>>();
     let projectiles = session.projectiles.iter().map(|projectile|serde_json::json!({
@@ -1601,6 +2154,17 @@ fn capture_frame(
         ("view", serde_json::json!(state.capture_view)),
         ("started", serde_json::json!(state.started)),
         ("paused", serde_json::json!(state.paused)),
+        ("progress", serde_json::json!(session.progress())),
+        ("expedition", serde_json::json!(session.expedition_progress())),
+        ("package_identity", serde_json::json!(view.package_identity)),
+        ("northern", northern::snapshot(northern_world.as_deref(), render.as_deref(), ocean_status.as_deref(), &ocean_frame, &ocean_profile)),
+        ("grand_surface_sample", serde_json::json!(state.capture_surface_sample)),
+        ("water_lab", water_lab::snapshot(&lab_settings, &lab_frame, &wind_field)),
+        ("expedition_fixture", serde_json::json!(expedition_capture::description(&state.capture_view))),
+        ("readability_fixture", serde_json::json!(readability_capture::description(&state.capture_view))),
+        ("readability_state", readability_capture::receipt(readability.as_deref())),
+        ("expedition_rally", serde_json::json!(session.expedition_rally_status())),
+        ("player_tuning", serde_json::json!(session.player_tuning(&tuning))),
         ("terminal_menu_fixture", serde_json::json!(matches!(state.capture_view.as_str(), "terminal-win" | "terminal-defeat").then_some("synthetic-knockout-for-menu-presentation"))),
         ("terminal_menu_outcome", serde_json::json!(session.outcome.map(|outcome| match outcome {
             hex_arena::ArenaOutcome::Winner(id) if Some(id) == session.human_actor_id() => "win",
@@ -1627,6 +2191,8 @@ fn capture_frame(
         ("focus_anchor", serde_json::json!(state.capture_focus)),
         ("phase_reached_frame", serde_json::json!(state.capture_event_frame)),
         ("render_ready_frame", serde_json::json!(state.capture_ready_frame)),
+        ("capture_settle_frames", serde_json::json!(state.capture_settle_frames)),
+        ("ocean_time_seconds", serde_json::json!(session.ocean_time().seconds)),
         ("liquid_phase_seconds", serde_json::json!(liquid_clock.as_ref().map(|clock| clock.phase_seconds()))),
         ("app_construction_to_render_ready_ms", serde_json::json!(state.capture_ready_elapsed_ms)),
         ("camera", serde_json::json!(cameras.single().ok().map(|camera| serde_json::json!({"position": camera.translation.to_array(), "rotation": camera.rotation.to_array()})))),
@@ -1646,7 +2212,7 @@ fn capture_frame(
         ("parties", serde_json::json!(parties)),
         ("encounter_summary", serde_json::json!(session.encounter_summary())),
         ("encounter_stats", serde_json::json!(session.encounter_stats())),
-        ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life-extended-leashes: all actors start with 100000 HP; validated ground, Shadow and Dragon home leashes are 150 units before admission; human revisits persistent party areas for 72 ticks with current dry supported, body-clear and visible placement within 10 units of home; forward distances Dragon 2.5, Goblin 1.1, Shaman/Shadow 8 units; Area Blast requested every 240 ticks; authored search, activation, attacks and movement. Not normal home-return, movement, human balance, or ordinary gameplay evidence."))),
+        ("synthetic_fixture", serde_json::json!(encounter::stress_view(&state.capture_view).then_some("synthetic-party-visits-extra-life-extended-leashes: all actors start with 100000 HP; validated ground, Shadow and Dragon home leashes are 150 units before admission; human revisits persistent party areas for 72 ticks with current dry supported, body-clear and visible placement within 10 units of home; forward distances Dragon 2.5, Goblin 1.1, Shaman/Shadow 8 units; tap Fireball requested every 240 ticks; authored search, activation, attacks and movement. Not normal home-return, movement, human balance, or ordinary gameplay evidence."))),
         ("stress_ticks", serde_json::json!(state.capture_stress_ticks)),
         ("wisp_stress", serde_json::json!(wisp::stress_view(&state.capture_view).then(|| serde_json::json!({
             "fixture": "synthetic-wisp-hp-1000", "nominal_hp": state.capture_wisp_nominal_hp,
@@ -1668,9 +2234,12 @@ fn capture_frame(
         ("engine_time_delta_ms", serde_json::json!(state.frame_times)),
         ("simulation_frame_dt_ms", serde_json::json!(state.simulation_frame_times)),
         ("app_frame_wall_intervals_ms", serde_json::json!(state.frame_wall_intervals)),
+        ("frame_timing_coverage", serde_json::json!(state.frame_timing_coverage())),
         ("frame_timing_note", serde_json::json!("Instant start-to-start of consecutive main app Update frames; includes scheduler and render-submission waits, not GPU execution or vsync timing. Simulation dt is a separate engine clock.")),
+        ("frame_timing_scope", serde_json::json!("App lifetime from the first recorded Update start, including loading, menus, pauses and round changes. Arrays retain their original prefix; observed and dropped counts keep advancing after capacity. Full-session frame percentiles require frame_timing_coverage.full_session_frame_percentiles_allowed; a complete record alone does not establish active-play duration or native performance.")),
         ("frame_interval_indexing", serde_json::json!("Wall interval index 0 spans Update starts at frame 1 to 2 and includes frame 1 work; stress tick rows identify their containing app frame.")),
         ("tick_samples", serde_json::json!(tick_samples)),
+        ("battle_ui", serde_json::json!(ui.as_ref().map(|ui|ui.snapshot()))),
         ("width", serde_json::json!(WIDTH)),
         ("height", serde_json::json!(HEIGHT)),
         ("evidence", serde_json::json!(if encounter::stress_view(&state.capture_view) || wisp::stress_view(&state.capture_view) { "SYNTHETIC_PERFORMANCE; normal gameplay, movement, human balance, GPU and vsync are not established" } else { "STATIC_CAPTURE_UNREVIEWED; logic is recorded separately; native feel pending" })),

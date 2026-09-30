@@ -135,8 +135,20 @@ New Map** is visible but disabled with **Coming Soon**.
 
 The catalog currently resolves Flat Arena, The Crossing, Procedural Hills, Rolling
 Hills, Frozen Hills, Volcanic Hills, Sky Islands, Mountains, Caves, Waterfall,
-Forest, Deep Forest, Prairie, Fort, Seven Regions, Two Rings, and Mountain Range.
-Duplicate internal scenario uses do not create duplicate choices.
+Forest, Deep Forest, Prairie, Desert Transition, Desert Plain, Dunes, Desert Oasis
+Rings, Sandy Islets, Wooded Island, Ocean Archipelagoes, Fort, Crystal Ascent, Crystal
+Mountain, Seven Regions, Two Rings, Mountain Range, and Grand V3 Baseline. Duplicate
+internal scenario uses do not create duplicate choices. Several
+maps may share one environment when their recipe or layout creates a distinct
+player-facing experience; Arid intentionally supplies three focused `Single` maps
+and one Ring19 composite, while Coastal supplies two focused `Single` maps and one
+Macro archipelago. Sandbox staging remains on each island world's ordinary playable
+component; scenic satellite islands do not become deployable cross-water routes.
+
+Grand V3 Baseline uses the approved fixed seed and starts its non-combat party at the dry
+coastal overlook near the river outlet. Its catalog row names the final preview path, but
+the preview itself is publication evidence: it must be generated from the completed world
+and must not be substituted with the earlier undecorated proxy capture.
 
 ## Deployment and frozen launch
 

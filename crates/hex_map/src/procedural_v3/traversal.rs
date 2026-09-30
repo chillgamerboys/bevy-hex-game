@@ -6,9 +6,57 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use hex_core::{HexCoord, TilePos, TraversalEndpoint, TraversalProfile};
+use hex_core::{HexCoord, Level, TilePos, TraversalEndpoint, TraversalProfile};
 
 use super::volume::{SurfaceAccess, VolumePlan};
+
+/// Whether one exact surface would be retained as a node by
+/// [`OrdinaryGraph::from_volume`].
+///
+/// This narrow predicate lets authored-route validators inspect a handful of
+/// exact positions without rebuilding the complete 105k-column graph. Ordinary
+/// nodes intentionally remain present even with zero headroom; walker admission
+/// is decided by [`ordinary_transition_is_admitted`].
+pub(crate) fn ordinary_surface_is_node(
+    volume: &VolumePlan,
+    blocked: Option<&BTreeSet<TilePos>>,
+    position: TilePos,
+) -> bool {
+    volume
+        .surfaces
+        .get(&position)
+        .is_some_and(|metadata| metadata.access == SurfaceAccess::Ordinary)
+        && blocked.is_none_or(|blocked| !blocked.contains(&position))
+}
+
+/// Whether the complete ordinary graph would publish one symmetric edge.
+///
+/// The implementation deliberately mirrors [`OrdinaryGraph::from_volume`]:
+/// exact ordinary/nonblocked endpoints, adjacent horizontal columns, projected
+/// headroom with the same fail-closed default, and walker admission in both
+/// directions.
+pub(crate) fn ordinary_transition_is_admitted(
+    volume: &VolumePlan,
+    blocked: Option<&BTreeSet<TilePos>>,
+    from: TilePos,
+    to: TilePos,
+) -> bool {
+    if from.coord.distance(to.coord) != 1
+        || !ordinary_surface_is_node(volume, blocked, from)
+        || !ordinary_surface_is_node(volume, blocked, to)
+    {
+        return false;
+    }
+    let from_endpoint = TraversalEndpoint::new(
+        from,
+        true,
+        volume.surface_headroom(from).unwrap_or_default(),
+    );
+    let to_endpoint =
+        TraversalEndpoint::new(to, true, volume.surface_headroom(to).unwrap_or_default());
+    TraversalProfile::WALKER.admits_transition(from_endpoint, to_endpoint)
+        && TraversalProfile::WALKER.admits_transition(to_endpoint, from_endpoint)
+}
 
 /// Deterministic graph of surfaces labelled for ordinary walker traversal.
 ///
@@ -18,6 +66,8 @@ use super::volume::{SurfaceAccess, VolumePlan};
 /// may omit them from the graph when validating routes around generated obstacles.
 #[derive(Debug)]
 pub(crate) struct OrdinaryGraph {
+    positions_by_coord: BTreeMap<HexCoord, Vec<TilePos>>,
+    endpoints: BTreeMap<TilePos, TraversalEndpoint>,
     neighbors: BTreeMap<TilePos, Vec<TilePos>>,
 }
 
@@ -94,7 +144,126 @@ impl OrdinaryGraph {
             adjacent.sort_unstable();
         }
 
-        Self { neighbors }
+        Self {
+            positions_by_coord,
+            endpoints,
+            neighbors,
+        }
+    }
+
+    /// Reprojects only columns whose semantic surfaces changed.
+    ///
+    /// Surface eligibility and headroom are column-local, and traversal edges
+    /// only join horizontally adjacent columns. Removing the old vertices and
+    /// every incident edge, then rebuilding those vertices and incident edges,
+    /// is therefore exactly equivalent to [`Self::from_volume`] for the updated
+    /// volume. The returned set contains every old or new vertex incident to the
+    /// repair so callers can update cached reachability without rescanning the
+    /// complete graph.
+    pub(crate) fn refresh_coords(
+        &mut self,
+        volume: &VolumePlan,
+        blocked: Option<&BTreeSet<TilePos>>,
+        changed_coords: impl IntoIterator<Item = HexCoord>,
+    ) -> BTreeSet<TilePos> {
+        let changed_coords = changed_coords.into_iter().collect::<BTreeSet<_>>();
+        let mut affected = BTreeSet::<TilePos>::new();
+
+        for coord in &changed_coords {
+            let old_positions = self.positions_by_coord.remove(coord).unwrap_or_default();
+            for position in old_positions {
+                affected.insert(position);
+                self.endpoints.remove(&position);
+                if let Some(old_neighbors) = self.neighbors.remove(&position) {
+                    for neighbor in old_neighbors {
+                        affected.insert(neighbor);
+                        if let Some(adjacent) = self.neighbors.get_mut(&neighbor) {
+                            if let Ok(index) = adjacent.binary_search(&position) {
+                                adjacent.remove(index);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for coord in &changed_coords {
+            let positions = volume
+                .surfaces
+                .range(TilePos::new(*coord, Level::MIN)..=TilePos::new(*coord, Level::MAX))
+                .filter_map(|(position, metadata)| {
+                    (metadata.access == SurfaceAccess::Ordinary
+                        && blocked.is_none_or(|blocked| !blocked.contains(position)))
+                    .then_some(*position)
+                })
+                .collect::<Vec<_>>();
+            for position in &positions {
+                let headroom = volume.surface_headroom(*position).unwrap_or_default();
+                self.endpoints
+                    .insert(*position, TraversalEndpoint::new(*position, true, headroom));
+                self.neighbors.insert(*position, Vec::new());
+                affected.insert(*position);
+            }
+            if !positions.is_empty() {
+                self.positions_by_coord.insert(*coord, positions);
+            }
+        }
+
+        let coordinate_pairs = changed_coords
+            .iter()
+            .flat_map(|coord| {
+                coord.neighbors().into_iter().map(move |neighbor| {
+                    if *coord <= neighbor {
+                        (*coord, neighbor)
+                    } else {
+                        (neighbor, *coord)
+                    }
+                })
+            })
+            .collect::<BTreeSet<_>>();
+        for (from_coord, to_coord) in coordinate_pairs {
+            let Some(from_positions) = self.positions_by_coord.get(&from_coord) else {
+                continue;
+            };
+            let Some(to_positions) = self.positions_by_coord.get(&to_coord) else {
+                continue;
+            };
+            let admitted = from_positions
+                .iter()
+                .flat_map(|from| to_positions.iter().map(move |to| (*from, *to)))
+                .filter(|(from, to)| {
+                    self.endpoints
+                        .get(from)
+                        .copied()
+                        .is_some_and(|from_endpoint| {
+                            self.endpoints.get(to).copied().is_some_and(|to_endpoint| {
+                                TraversalProfile::WALKER
+                                    .admits_transition(from_endpoint, to_endpoint)
+                                    && TraversalProfile::WALKER
+                                        .admits_transition(to_endpoint, from_endpoint)
+                            })
+                        })
+                })
+                .collect::<Vec<_>>();
+            for (from, to) in admitted {
+                if let Some(from_neighbors) = self.neighbors.get_mut(&from) {
+                    match from_neighbors.binary_search(&to) {
+                        Ok(_) => {}
+                        Err(index) => from_neighbors.insert(index, to),
+                    }
+                }
+                if let Some(to_neighbors) = self.neighbors.get_mut(&to) {
+                    match to_neighbors.binary_search(&from) {
+                        Ok(_) => {}
+                        Err(index) => to_neighbors.insert(index, from),
+                    }
+                }
+                affected.insert(from);
+                affected.insert(to);
+            }
+        }
+
+        affected
     }
 
     /// Number of ordinary, non-blocked exact surfaces.
@@ -222,6 +391,49 @@ mod tests {
             .expect("a hex has six neighbors")
     }
 
+    fn assert_graphs_equal(actual: &OrdinaryGraph, expected: &OrdinaryGraph) {
+        assert_eq!(actual.positions_by_coord, expected.positions_by_coord);
+        assert_eq!(actual.endpoints, expected.endpoints);
+        assert_eq!(actual.neighbors, expected.neighbors);
+    }
+
+    #[test]
+    fn route_local_node_and_edge_predicates_match_the_complete_graph() {
+        let west = HexCoord::ORIGIN;
+        let east = east_of(west);
+        let north_east = east_of(east);
+        let plan = volume([
+            (west, vec![stone(0, 5), stone(10, 11)], vec![4, 10]),
+            (east, vec![stone(0, 6), stone(10, 11)], vec![5, 10]),
+            (north_east, vec![stone(0, 8)], vec![7]),
+        ]);
+        let blocked_fixture = BTreeSet::from([TilePos::new(east, 5)]);
+        let candidates = plan
+            .surfaces
+            .keys()
+            .copied()
+            .chain([TilePos::new(west, 99)])
+            .collect::<Vec<_>>();
+
+        for blocked in [None, Some(&blocked_fixture)] {
+            let graph = OrdinaryGraph::from_volume(&plan, blocked);
+            for position in &candidates {
+                assert_eq!(
+                    ordinary_surface_is_node(&plan, blocked, *position),
+                    graph.contains(*position),
+                    "node mismatch at {position:?} with blocked={blocked:?}"
+                );
+                for neighbor in &candidates {
+                    assert_eq!(
+                        ordinary_transition_is_admitted(&plan, blocked, *position, *neighbor),
+                        graph.admits(*position, *neighbor),
+                        "edge mismatch {position:?} -> {neighbor:?} with blocked={blocked:?}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn stacked_surfaces_remain_exact_and_connect_at_matching_levels() {
         let west = HexCoord::ORIGIN;
@@ -327,5 +539,55 @@ mod tests {
             .distances_from(TilePos::new(first.coord, 99))
             .is_empty());
         assert_eq!(graph.len(), 3);
+    }
+
+    #[test]
+    fn local_column_refresh_matches_a_complete_graph_rebuild() {
+        let root = HexCoord::from_axial(0, 0);
+        let edited = HexCoord::from_axial(1, 0);
+        let goal = HexCoord::from_axial(2, 0);
+        let detour_first = HexCoord::from_axial(0, 1);
+        let detour_second = HexCoord::from_axial(1, 1);
+        let mut plan = volume([
+            (root, vec![stone(0, 5)], vec![4]),
+            (edited, vec![stone(0, 5), stone(10, 11)], vec![4, 10]),
+            (goal, vec![stone(0, 5)], vec![4]),
+            (detour_first, vec![stone(0, 5)], vec![4]),
+            (detour_second, vec![stone(0, 5)], vec![4]),
+        ]);
+        let mut graph = OrdinaryGraph::from_volume(&plan, None);
+        let old_ground = TilePos::new(edited, 4);
+        let old_upper = TilePos::new(edited, 10);
+
+        plan.columns.insert(
+            edited,
+            VolumeColumn {
+                elements: vec![stone(0, 7)],
+            },
+        );
+        assert!(plan.surfaces.remove(&old_ground).is_some());
+        assert!(plan.surfaces.remove(&old_upper).is_some());
+        let raised = TilePos::new(edited, 6);
+        assert!(plan.surfaces.insert(raised, surface()).is_none());
+
+        let affected = graph.refresh_coords(&plan, None, [edited]);
+        let rebuilt = OrdinaryGraph::from_volume(&plan, None);
+        assert_graphs_equal(&graph, &rebuilt);
+        assert!(affected.contains(&old_ground));
+        assert!(affected.contains(&old_upper));
+        assert!(affected.contains(&raised));
+        assert!(affected.contains(&TilePos::new(root, 4)));
+        assert!(affected.contains(&TilePos::new(goal, 4)));
+
+        plan.columns.insert(
+            edited,
+            VolumeColumn {
+                elements: vec![stone(0, 5)],
+            },
+        );
+        assert!(plan.surfaces.remove(&raised).is_some());
+        assert!(plan.surfaces.insert(old_ground, surface()).is_none());
+        graph.refresh_coords(&plan, None, [edited]);
+        assert_graphs_equal(&graph, &OrdinaryGraph::from_volume(&plan, None));
     }
 }

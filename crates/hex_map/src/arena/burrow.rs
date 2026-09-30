@@ -40,7 +40,7 @@ impl Resolver<'_> {
     pub(super) fn resolve(
         &self,
         request: ArenaBurrowRequest,
-        sequences: &mut BTreeMap<u8, u64>,
+        sequences: &mut BTreeMap<u32, u64>,
         map: &mut VoxelMap,
         damage: &mut TerrainDamageState,
         damaged: &mut DamagedVoxels,
@@ -70,7 +70,7 @@ impl Resolver<'_> {
     fn admit(
         &self,
         request: &ArenaBurrowRequest,
-        sequences: &mut BTreeMap<u8, u64>,
+        sequences: &mut BTreeMap<u32, u64>,
         map: &VoxelMap,
     ) -> Result<(), (Option<TilePos>, ArenaBurrowRejection)> {
         use ArenaBurrowRejection as Reject;

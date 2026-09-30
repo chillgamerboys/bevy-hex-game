@@ -75,7 +75,7 @@ fn duel_menu_switches_actual_parties_and_preserves_selection_across_restart_and_
         };
         press_action(&mut fixture, hud::Action::Encounter(rejected));
         assert_party(&fixture);
-        tap_key(&mut fixture, KeyCode::KeyR);
+        tap_restart(&mut fixture);
         assert_party(&fixture);
         assert!(!fixture.world().resource::<ViewState>().started);
         let input = &fixture.world().resource::<ArenaInput>().human;

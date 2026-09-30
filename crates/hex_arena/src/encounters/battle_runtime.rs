@@ -250,7 +250,7 @@ fn deploy(
     let mut actors = Vec::new();
     let mut parties = Vec::new();
     let mut brains = BTreeMap::new();
-    let mut next_id = 0_u8;
+    let mut next_id = 0_u32;
     let mut wisp_slots = BTreeMap::new();
     for (side, roster) in setup.rosters.iter().enumerate() {
         let region = regions.get(side).ok_or("Missing deployment side")?;
@@ -372,7 +372,10 @@ pub(super) fn deployment_pose(
     let mut surfaces: Vec<_> = region.surfaces.iter().copied().collect();
     surfaces.sort_by_key(|pos| (pos.coord.distance(region.preferred.coord), *pos));
     surfaces.into_iter().find_map(|surface| {
-        if !view.voxels.contains_key(&surface) {
+        if view
+            .solid_at(surface)
+            .is_none_or(|material| material.is_air())
+        {
             return None;
         }
         let feet = surface.coord.to_world(geometry.top(surface) + SKIN);
@@ -390,7 +393,7 @@ pub(super) fn deployment_pose(
         let footprint_ok = surface.coord.within_radius(4).into_iter().all(|coord| {
             let support = TilePos::new(coord, surface.level);
             !shapes::voxel_overlap(support, geometry, &body)
-                || (region.surfaces.contains(&support) && view.voxels.contains_key(&support))
+                || (region.surfaces.contains(&support) && view.solid_at(support).is_some())
         });
         footprint_ok.then_some(feet)
     })
@@ -413,7 +416,7 @@ pub(super) fn flying_deployment_pose(
     surfaces.truncate(7);
     for layer in 0_u8..2 {
         for surface in &surfaces {
-            if !view.voxels.contains_key(surface) {
+            if !view.solid_at(*surface).is_some() {
                 continue;
             }
             let ground = surface.coord.to_world(geometry.top(*surface) + SKIN);
@@ -422,7 +425,7 @@ pub(super) fn flying_deployment_pose(
             if surface.coord.within_radius(2).into_iter().any(|coord| {
                 let support = TilePos::new(coord, surface.level);
                 shapes::voxel_overlap(support, geometry, &body)
-                    && !(region.surfaces.contains(&support) && view.voxels.contains_key(&support))
+                    && !(region.surfaces.contains(&support) && view.solid_at(support).is_some())
             }) {
                 continue;
             }

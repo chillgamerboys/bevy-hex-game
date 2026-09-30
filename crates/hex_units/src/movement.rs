@@ -20,10 +20,9 @@
 //!
 //! # Finding a way
 //!
-//! [`Reach`](crate::movement::Reach) floods outward from a surface and records how it
-//! got to each one, so a single search answers both "where can this piece go" and "how
-//! does it get to that particular tile". [`route`] is the one-destination convenience
-//! on top.
+//! [`Reach`](crate::movement::Reach) floods outward when a caller needs a complete
+//! movement field. [`route`] and [`route_with_occupancy`] instead use deterministic
+//! destination-specific A*, avoiding a whole-world flood for long exploration clicks.
 //!
 //! **`hexx::a_star` cannot be used here, despite being compiled in.** Its signature is
 //! keyed on `Hex` alone, so it has nowhere to put a level: a bridge and the ground
@@ -34,9 +33,12 @@
 //! of the project documentation, recommended switching to `hexx`; that advice predates
 //! the voxel map and following it would silently collapse every stack.
 //!
-//! Steps all cost one. Breadth-first order is therefore shortest-first, and no
-//! priority queue is needed — the day terrain costs differ to cross, that stops being
-//! true and [`Reach::from`](crate::movement::Reach::from) is where it changes.
+//! Steps all cost one. A* uses horizontal hex distance, which never overestimates even
+//! when stacked surfaces force a detour, plus exact positional tie-breaking.
+
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+use std::sync::Arc;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -44,7 +46,7 @@ use serde::{Deserialize, Serialize};
 
 use hex_assets::SubstanceTable;
 use hex_core::{
-    AppSystems, AuthoritativeSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems,
+    AppSystems, AuthoritativeSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems, Screen,
     SimulationRole, SubstanceId, TerrainSystems, TilePos, TraversalBlockers, TraversalEndpoint,
     TraversalProfile, UnitId,
 };
@@ -109,7 +111,9 @@ impl MovementCrossings {
 pub fn plugin(app: &mut App) {
     app.register_type::<Body>()
         .init_resource::<SimulationRole>()
-        .init_resource::<MovementCrossings>();
+        .init_resource::<MovementCrossings>()
+        .init_resource::<FootingCache>()
+        .add_systems(OnExit(Screen::Gameplay), clear_footing_cache);
     app.configure_sets(
         Update,
         AuthoritativeSystems.run_if(resource_equals(SimulationRole::Authority)),
@@ -210,6 +214,113 @@ pub struct Footing {
     surfaces: HashMap<HexCoord, Vec<Standing>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FootingSourceKey {
+    terrain_revision: u64,
+    substances: u64,
+    blockers: u64,
+    authored_objects: u64,
+}
+
+/// Session cache of body-specific standable terrain projections.
+///
+/// This cache owns no map authority. Its source key covers the public terrain
+/// revision plus every non-tile input to [`Footing`], and it is cleared on gameplay
+/// exit. Consumers share immutable [`Arc`] projections across hover and click paths.
+#[derive(Resource, Debug, Default)]
+pub struct FootingCache {
+    source: Option<FootingSourceKey>,
+    by_body: Vec<(Body, Arc<Footing>)>,
+    builds: u64,
+}
+
+impl FootingCache {
+    /// Returns a cached body projection or builds it exactly once for this source.
+    pub fn get_or_build<'a>(
+        &mut self,
+        terrain_revision: u64,
+        tiles: impl Iterator<Item = (&'a TilePos, &'a HexSpan, &'a SubstanceId, &'a Headroom)>,
+        table: &SubstanceTable,
+        body: Body,
+        blockers: Option<&TraversalBlockers>,
+        authored_objects: &AuthoredObjectOccupancy,
+    ) -> Arc<Footing> {
+        let source = FootingSourceKey {
+            terrain_revision,
+            substances: substance_solidity_fingerprint(table),
+            blockers: blocker_fingerprint(blockers),
+            authored_objects: authored_objects.fingerprint(),
+        };
+        if self.source != Some(source) {
+            self.source = Some(source);
+            self.by_body.clear();
+        }
+        if let Some((_, footing)) = self
+            .by_body
+            .iter()
+            .find(|(cached_body, _)| *cached_body == body)
+        {
+            return Arc::clone(footing);
+        }
+        let footing = Arc::new(Footing::from_tiles_with_object_occupancy(
+            tiles,
+            table,
+            body,
+            blockers,
+            authored_objects,
+        ));
+        self.builds = self.builds.wrapping_add(1);
+        self.by_body.push((body, Arc::clone(&footing)));
+        footing
+    }
+
+    /// Number of full tile projections built during this gameplay session.
+    #[must_use]
+    pub const fn builds(&self) -> u64 {
+        self.builds
+    }
+
+    fn clear(&mut self) {
+        self.source = None;
+        self.by_body.clear();
+        self.builds = 0;
+    }
+}
+
+fn clear_footing_cache(mut cache: ResMut<FootingCache>) {
+    cache.clear();
+}
+
+fn fnv_bytes(mut state: u64, bytes: impl IntoIterator<Item = u8>) -> u64 {
+    for byte in bytes {
+        state ^= u64::from(byte);
+        state = state.wrapping_mul(1_099_511_628_211);
+    }
+    state
+}
+
+fn substance_solidity_fingerprint(table: &SubstanceTable) -> u64 {
+    let mut fingerprint = 14_695_981_039_346_656_037_u64;
+    for index in 0..table.len() {
+        let Ok(index) = u16::try_from(index) else {
+            return 0;
+        };
+        fingerprint = fnv_bytes(fingerprint, index.to_le_bytes());
+        fingerprint = fnv_bytes(fingerprint, [u8::from(table.is_solid(SubstanceId(index)))]);
+    }
+    fingerprint
+}
+
+fn blocker_fingerprint(blockers: Option<&TraversalBlockers>) -> u64 {
+    let mut fingerprint = 14_695_981_039_346_656_037_u64;
+    for position in blockers.into_iter().flat_map(TraversalBlockers::iter) {
+        fingerprint = fnv_bytes(fingerprint, position.coord.x().to_le_bytes());
+        fingerprint = fnv_bytes(fingerprint, position.coord.y().to_le_bytes());
+        fingerprint = fnv_bytes(fingerprint, position.level.to_le_bytes());
+    }
+    fingerprint
+}
+
 impl Footing {
     /// Collects the surfaces `body` can stand on from the tile entities.
     ///
@@ -279,15 +390,19 @@ impl Footing {
         };
 
         for (pos, span, substance, headroom) in tiles {
+            // Logical terrain publishes every material run, including buried strata
+            // and non-solid liquids. Reject those with the cheap local predicate
+            // before probing the ordered blocker and authored-volume indexes; neither
+            // can make an otherwise inadmissible surface standable.
+            if !profile.admits_surface(table.is_solid(*substance), *headroom) {
+                continue;
+            }
             if blockers.is_some_and(|blockers| blockers.contains(*pos)) {
                 continue;
             }
             if authored_objects
                 .is_some_and(|occupancy| occupancy.blocks_standing_body(*pos, profile))
             {
-                continue;
-            }
-            if !profile.admits_surface(table.is_solid(*substance), *headroom) {
                 continue;
             }
             // This run passed the solid-substance check, and its `TilePos` is already
@@ -379,14 +494,27 @@ impl Footing {
     /// away, and without a tiebreak the winner was whichever the map spawned first.
     #[must_use]
     pub fn steps_from(&self, from: Standing, coord: HexCoord) -> Vec<Standing> {
-        let mut candidates: Vec<Standing> = self
-            .at_coord(coord)
-            .iter()
-            .filter(|candidate| self.admits_step(from.pos, candidate.pos))
-            .copied()
-            .collect();
-        candidates.sort_by_key(|c| (from.pos.level_step_to(c.pos).abs(), c.pos.level));
+        let mut candidates = Vec::new();
+        self.steps_from_into(from, coord, &mut candidates);
         candidates
+    }
+
+    /// Reuses caller-owned scratch storage while preserving [`Self::steps_from`]'s
+    /// exact candidate order.
+    fn steps_from_into(&self, from: Standing, coord: HexCoord, candidates: &mut Vec<Standing>) {
+        candidates.clear();
+        candidates.extend(
+            self.at_coord(coord)
+                .iter()
+                .filter(|candidate| self.admits_step(from.pos, candidate.pos))
+                .copied(),
+        );
+        candidates.sort_by_key(|candidate| {
+            (
+                from.pos.level_step_to(candidate.pos).abs(),
+                candidate.pos.level,
+            )
+        });
     }
 
     /// The single surface a piece would step onto at `coord`: the closest in height.
@@ -610,18 +738,10 @@ impl Reach {
 /// a test asserting a route fails — needs re-reading, because most of those failures
 /// were the router, not the map.
 ///
-/// For a single query this builds a whole flood fill and then reads one path out of
-/// it. That is deliberate: the caller that runs every frame wants the flood fill
-/// anyway, for the movement range, so [`Reach`] is the real interface and this is the
-/// convenience on top.
+/// This destination-specific search leaves whole-field movement previews to [`Reach`].
 #[must_use]
 pub fn route(from: Standing, to: Standing, footing: &Footing) -> Option<Vec<Standing>> {
-    // Standing still is a valid answer, and a one-element path is what callers expect
-    // for it — `HexPathingLine` turns that into an animation that finishes at once.
-    if from.pos == to.pos {
-        return Some(vec![from]);
-    }
-    Reach::from(from, footing, None).path_to(to.pos)
+    a_star_route(from, to, footing, None)
 }
 
 /// The shortest walk that never enters another body's exact surface.
@@ -633,10 +753,82 @@ pub fn route_with_occupancy(
     occupancy: &UnitOccupancy,
     mover: UnitId,
 ) -> Option<Vec<Standing>> {
+    a_star_route(from, to, footing, Some((occupancy, mover)))
+}
+
+fn a_star_route(
+    from: Standing,
+    to: Standing,
+    footing: &Footing,
+    occupancy: Option<(&UnitOccupancy, UnitId)>,
+) -> Option<Vec<Standing>> {
     if from.pos == to.pos {
         return Some(vec![from]);
     }
-    Reach::with_occupancy(from, footing, None, occupancy, mover).path_to(to.pos)
+    if footing.at(from.pos).is_none() || footing.at(to.pos).is_none() {
+        return None;
+    }
+
+    // `Reverse` turns BinaryHeap's maximum order into the canonical minimum key.
+    // Insertion order preserves the same deterministic neighbour preference as the
+    // breadth-first movement preview when several equally short paths exist. Exact
+    // position remains a final tie-break if the monotonic counter ever wraps.
+    let mut frontier = BinaryHeap::new();
+    let mut insertion_order = 0_u64;
+    frontier.push(Reverse((
+        from.pos.coord.distance(to.pos.coord),
+        0_u32,
+        insertion_order,
+        from.pos,
+    )));
+    let mut costs: HashMap<TilePos, u32> = HashMap::default();
+    costs.insert(from.pos, 0_u32);
+    let mut came_from: HashMap<TilePos, TilePos> = HashMap::default();
+    let mut candidates = Vec::new();
+
+    while let Some(Reverse((_estimate, current_cost, _order, current_pos))) = frontier.pop() {
+        if costs.get(&current_pos).copied() != Some(current_cost) {
+            continue;
+        }
+        if current_pos == to.pos {
+            let mut positions = vec![current_pos];
+            let mut cursor = current_pos;
+            while cursor != from.pos {
+                cursor = *came_from.get(&cursor)?;
+                positions.push(cursor);
+            }
+            positions.reverse();
+            return positions
+                .into_iter()
+                .map(|position| footing.at(position))
+                .collect();
+        }
+
+        let current = footing.at(current_pos)?;
+        for neighbor_coord in current_pos.coord.neighbors() {
+            footing.steps_from_into(current, neighbor_coord, &mut candidates);
+            for next in candidates.iter().copied() {
+                if occupancy
+                    .is_some_and(|(occupied, mover)| occupied.is_occupied(next.pos, Some(mover)))
+                {
+                    continue;
+                }
+                let next_cost = current_cost.saturating_add(1);
+                if costs
+                    .get(&next.pos)
+                    .is_some_and(|known| *known <= next_cost)
+                {
+                    continue;
+                }
+                costs.insert(next.pos, next_cost);
+                came_from.insert(next.pos, current_pos);
+                let estimate = next_cost.saturating_add(next.pos.coord.distance(to.pos.coord));
+                insertion_order = insertion_order.wrapping_add(1);
+                frontier.push(Reverse((estimate, next_cost, insertion_order, next.pos)));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -645,7 +837,7 @@ mod tests {
 
     use super::*;
     use hex_assets::{ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SwatchId};
-    use hex_core::{Level, MAX_HEADROOM};
+    use hex_core::{AuthoredObjectVoxelRun, Level, MAX_HEADROOM};
 
     const STONE: SubstanceId = SubstanceId(10);
 
@@ -708,6 +900,104 @@ mod tests {
             body,
             None,
         )
+    }
+
+    #[test]
+    fn footing_cache_reuses_one_projection_until_an_authoritative_input_changes() {
+        let coord = HexCoord::ORIGIN;
+        let tiles = [tile(coord, 4)];
+        let table = table();
+        let authored = AuthoredObjectOccupancy::default();
+        let mut blockers = TraversalBlockers::new();
+        let mut cache = FootingCache::default();
+
+        let first = cache.get_or_build(
+            7,
+            tiles
+                .iter()
+                .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+            &table,
+            NORMAL,
+            Some(&blockers),
+            &authored,
+        );
+        let reused = cache.get_or_build(
+            7,
+            tiles
+                .iter()
+                .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+            &table,
+            NORMAL,
+            Some(&blockers),
+            &authored,
+        );
+        assert!(Arc::ptr_eq(&first, &reused));
+        assert_eq!(cache.builds(), 1);
+
+        let revised = cache.get_or_build(
+            8,
+            tiles
+                .iter()
+                .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+            &table,
+            NORMAL,
+            Some(&blockers),
+            &authored,
+        );
+        assert!(!Arc::ptr_eq(&first, &revised));
+        assert_eq!(cache.builds(), 2, "terrain revision invalidates the cache");
+
+        blockers.insert(tiles[0].0);
+        let blocked = cache.get_or_build(
+            8,
+            tiles
+                .iter()
+                .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+            &table,
+            NORMAL,
+            Some(&blockers),
+            &authored,
+        );
+        assert!(blocked.at(tiles[0].0).is_none());
+        assert_eq!(cache.builds(), 3, "blocker changes invalidate the cache");
+
+        blockers.remove(tiles[0].0);
+        let occupied = AuthoredObjectOccupancy::from_runs([AuthoredObjectVoxelRun {
+            top: TilePos::new(coord, 6),
+            bottom: 5,
+        }])
+        .expect("the authored-object fixture is a valid run");
+        let object_blocked = cache.get_or_build(
+            8,
+            tiles
+                .iter()
+                .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+            &table,
+            NORMAL,
+            Some(&blockers),
+            &occupied,
+        );
+        assert!(object_blocked.at(tiles[0].0).is_none());
+        assert_eq!(
+            cache.builds(),
+            4,
+            "authored occupancy invalidates the cache"
+        );
+
+        cache.clear();
+        assert_eq!(cache.builds(), 0);
+        let after_clear = cache.get_or_build(
+            8,
+            tiles
+                .iter()
+                .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+            &table,
+            NORMAL,
+            Some(&blockers),
+            &authored,
+        );
+        assert!(after_clear.at(tiles[0].0).is_some());
+        assert_eq!(cache.builds(), 1);
     }
 
     #[test]

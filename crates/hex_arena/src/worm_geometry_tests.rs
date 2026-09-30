@@ -385,3 +385,118 @@ fn initial_air_volume_requires_all_worm_masks_without_any_material_policy() {
     query.refresh(&view);
     assert!(!query.above_ground_clear(pose, &view, geometry));
 }
+
+#[test]
+fn compact_columns_require_real_material_conversion_and_exact_residency() {
+    use hex_core::arena::{ArenaResidency, ArenaSolidSpan};
+    let geometry = ArenaVoxelGeometry::default();
+    let cell = voxel(0, 0, 2);
+    let pose = body(
+        cell.coord
+            .to_world(geometry.top(cell) - geometry.level_height),
+        [Vec3::ZERO],
+    );
+    let dirt = SubstanceId(3);
+    let stone = SubstanceId(1);
+    let policy = ArenaBurrowMaterials {
+        eligible: [dirt, stone].into(),
+    };
+    let mut view = ArenaTerrainView {
+        columns: [(
+            cell.coord,
+            vec![ArenaSolidSpan {
+                bottom: cell,
+                top_level: cell.level,
+                substance: stone,
+            }],
+        )]
+        .into(),
+        ..Default::default()
+    };
+    let mut query = BurrowQuery::default();
+    query.refresh(&view);
+    fn context<'a>(
+        view: &'a ArenaTerrainView,
+        policy: &'a ArenaBurrowMaterials,
+        dirt: SubstanceId,
+        geometry: ArenaVoxelGeometry,
+    ) -> BurrowContext<'a> {
+        BurrowContext {
+            world: view,
+            policy,
+            dirt,
+            bodies: &[],
+            owner: 0,
+            geometry,
+        }
+    }
+    assert!(matches!(
+        query.admit(pose, pose, &context(&view, &policy, dirt, geometry)),
+        Admission::NeedsConversion(_)
+    ));
+    assert!(!query.above_ground_clear(pose, &view, geometry));
+    view.columns
+        .get_mut(&cell.coord)
+        .expect("authored column")
+        .first_mut()
+        .expect("authored solid span")
+        .substance = dirt;
+    assert!(matches!(
+        query.admit(pose, pose, &context(&view, &policy, dirt, geometry)),
+        Admission::Clear
+    ));
+    view.residency = Some(ArenaResidency {
+        catalogue: [(0, 0)].into(),
+        ready: Default::default(),
+    });
+    assert!(matches!(
+        query.admit(pose, pose, &context(&view, &policy, dirt, geometry)),
+        Admission::Blocked(StepRejection::Unloaded)
+    ));
+}
+
+#[test]
+fn streamed_dirty_columns_refresh_worm_liquid_and_static_intervals() {
+    use hex_core::arena::{ArenaSolidSpan, ArenaStaticSpan};
+    let coord = HexCoord::ORIGIN;
+    let position = TilePos::new(coord, 1);
+    let mut view = ArenaTerrainView {
+        revision: 1,
+        full_rebuild: true,
+        ..Default::default()
+    };
+    let mut query = BurrowQuery::default();
+    query.refresh(&view);
+    assert!(query.blocked_cell(position, &view).is_none());
+    view.full_rebuild = false;
+    view.revision += 1;
+    view.dirty_columns.insert(coord);
+    view.liquids.push(ArenaSolidSpan {
+        bottom: position,
+        top_level: 2,
+        substance: SubstanceId(1),
+    });
+    query.refresh(&view);
+    assert_eq!(
+        query.blocked_cell(position, &view),
+        Some(StepRejection::Liquid)
+    );
+    view.revision += 1;
+    view.liquids.clear();
+    view.static_spans.push(ArenaStaticSpan {
+        bottom: position,
+        top_level: 2,
+        blocks_movement: false,
+        blocks_projectiles: false,
+        blocks_sight: false,
+    });
+    query.refresh(&view);
+    assert_eq!(
+        query.blocked_cell(position, &view),
+        Some(StepRejection::Static)
+    );
+    view.revision += 1;
+    view.static_spans.clear();
+    query.refresh(&view);
+    assert!(query.blocked_cell(position, &view).is_none());
+}

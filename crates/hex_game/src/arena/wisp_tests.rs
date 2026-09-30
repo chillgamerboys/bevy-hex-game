@@ -47,7 +47,7 @@ fn wisp_recipes_use_fort_override_and_reset_to_originals_cleanly() {
         4
     );
     press_action(&mut fixture, hud::Action::Start);
-    tap_key(&mut fixture, KeyCode::KeyR);
+    tap_restart(&mut fixture);
     assert_eq!(
         fixture
             .world()

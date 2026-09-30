@@ -5,26 +5,26 @@ use serde::Serialize;
 
 use crate::{ArenaOutcome, ArenaSession, BotDebugSnapshot, Spell, CREATURE_ABILITY_COUNT, STEP};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum CombatCueKind {
     Release,
     Impact,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CombatCue {
     pub id: u64,
     pub tick: u64,
-    pub owner: u8,
+    pub owner: crate::ActorId,
     pub team: crate::TeamId,
     pub position: Vec3,
     pub kind: CombatCueKind,
 }
 
 /// Actual spell releases and HP losses, independent of presentation or bot estimates.
-#[derive(Debug, Default, Clone, Copy, Serialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, serde::Deserialize)]
 pub struct ActorCombatStats {
-    /// Shield, Fireball, and Area Blast releases, including unsuccessful casts.
+    /// Shield, Fireball, and High Jump activations, including unsuccessful casts.
     pub casts: [u32; 3],
     /// HP removed from the opponent, capped by their remaining life at each impact.
     pub damage_dealt: f32,
@@ -47,7 +47,7 @@ pub struct RoundSummary {
     /// Simulation duration, excluding menus and pauses.
     pub seconds: f64,
     /// Winning actor ID, if a single actor won.
-    pub winner: Option<u8>,
+    pub winner: Option<crate::ActorId>,
     /// True for a terminal round, including simultaneous knockout.
     pub complete: bool,
     /// Human then bot combat accounting.
@@ -87,7 +87,7 @@ impl ArenaSession {
         }
     }
 
-    pub(super) fn combat_cue(&mut self, owner: u8, point: Vec3, kind: CombatCueKind) {
+    pub(super) fn combat_cue(&mut self, owner: crate::ActorId, point: Vec3, kind: CombatCueKind) {
         let Some(team) = self
             .actors
             .iter()
@@ -101,7 +101,7 @@ impl ArenaSession {
 
     pub(super) fn combat_cue_from(
         &mut self,
-        owner: u8,
+        owner: crate::ActorId,
         team: crate::TeamId,
         point: Vec3,
         kind: CombatCueKind,
@@ -123,7 +123,7 @@ impl ArenaSession {
         }
     }
 
-    pub(super) fn record_cast(&mut self, owner: u8, spell: Spell) {
+    pub(super) fn record_cast(&mut self, owner: crate::ActorId, spell: Spell) {
         if let Some(actor) = self.actors.iter_mut().find(|a| a.id == owner) {
             actor.last_activity_tick = self.tick;
         }
@@ -131,7 +131,7 @@ impl ArenaSession {
             let ability = match spell {
                 Spell::Fireball => Some(0),
                 Spell::Shield => Some(1),
-                Spell::AreaBlast => None,
+                Spell::HighJump => None,
             };
             if let Some(index) = ability {
                 if let Some(count) = self
@@ -157,15 +157,22 @@ impl ArenaSession {
         }
         if let Some(count) = self
             .combat_stats
-            .get_mut(usize::from(owner))
+            .get_mut(usize::try_from(owner).unwrap_or(usize::MAX))
             .and_then(|stats| stats.casts.get_mut(spell.index()))
         {
             *count += 1;
         }
     }
 
-    pub(super) fn record_damage(&mut self, owner: u8, victim: u8, amount: f32) {
+    pub(super) fn record_damage(
+        &mut self,
+        owner: crate::ActorId,
+        victim: crate::ActorId,
+        amount: f32,
+    ) {
         if amount > 0.0 {
+            self.confirm_player_damage(owner, victim);
+            self.record_player_hit(owner, victim);
             if let Some(actor) = self.actors.iter_mut().find(|a| a.id == victim) {
                 actor.last_damage_tick = Some(self.tick);
                 actor.last_activity_tick = self.tick;
@@ -186,27 +193,36 @@ impl ArenaSession {
                 stats.first_damage_tick.get_or_insert(self.tick);
             }
         }
-        if let Some(stats) = self.combat_stats.get_mut(usize::from(victim)) {
+        if let Some(stats) = self
+            .combat_stats
+            .get_mut(usize::try_from(victim).unwrap_or(usize::MAX))
+        {
             stats.damage_received += amount;
             if owner == victim {
                 stats.self_damage += amount;
             }
         }
         if owner != victim && amount > 0.0 {
-            if let Some(stats) = self.combat_stats.get_mut(usize::from(owner)) {
+            if let Some(stats) = self
+                .combat_stats
+                .get_mut(usize::try_from(owner).unwrap_or(usize::MAX))
+            {
                 stats.damage_dealt += amount;
                 stats.first_damage_tick.get_or_insert(self.tick);
             }
         }
     }
 
-    pub(super) fn record_fireball_impact(&mut self, owner: u8, useful: bool) {
+    pub(super) fn record_fireball_impact(&mut self, owner: crate::ActorId, useful: bool) {
         if self.encounter.initialized {
             let stats = self.encounter.stats.entry(owner).or_default();
             stats.fireballs_resolved += 1;
             stats.useful_fireballs += u32::from(useful);
         }
-        if let Some(stats) = self.combat_stats.get_mut(usize::from(owner)) {
+        if let Some(stats) = self
+            .combat_stats
+            .get_mut(usize::try_from(owner).unwrap_or(usize::MAX))
+        {
             stats.fireballs_resolved += 1;
             stats.useful_fireballs += u32::from(useful);
         }

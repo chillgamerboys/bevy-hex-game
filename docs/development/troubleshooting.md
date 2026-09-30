@@ -26,6 +26,9 @@ causes them.
 | A piece floats above or sinks into the terrain | A tile's transform disagrees with its span, or its `TilePos` is the run's base rather than its surface. See the map crate's own list |
 | Movement looks wrong | A speed unit conversion. Speeds are world units per **second**, driven by `Res<Time>` |
 | The game appears frozen | It is paused. The overlay exists precisely because this was indistinguishable from a hang |
+| Exterior sky or empty space is visible beneath an authored landmark | Inspect the character-height seam view, not only the overhead hero frame, then audit every visible support column down to the world foundation. Elevated treads or transition runs can be locally valid while the surrounding annulus still begins above level 0; cutaway ownership is a second check only after exact occupancy is proven. |
+| An emissive voxel prop flickers while the camera moves | Audit the exact asymmetric face-ownership matrix before style batching: same-style contiguous cells cull their internal face; a Translucent/Additive cell yields its shared face to adjacent Opaque while the Opaque backing remains; Cutout/cross-alpha boundaries remain closed; and independently hideable canopy/non-canopy boundaries retain both faces. A clean still cannot clear flicker, so repeat the native camera-orbit check. |
+| A visual walk passed but a retained frame contains an obvious defect | The exit code proves route and capture mechanics, not pixel approval. Walk startup must leave `review-index.md` marked **INCOMPLETE — NOT REVIEWABLE** until the exact capture set is atomically completed. Then inspect every embedded frame, replace `UNREVIEWED` with explicit `PASS` or `FAIL`, record notes, and retain the native motion check for flicker or control feel. |
 
 ## It will not start
 

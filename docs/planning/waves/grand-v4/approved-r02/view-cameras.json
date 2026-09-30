@@ -1,0 +1,179 @@
+{
+  "valley-tree-bank": {
+    "position": [
+      70,
+      47.7,
+      -55
+    ],
+    "target": [
+      376,
+      223,
+      605
+    ],
+    "projection": "perspective",
+    "horizontal_fov_degrees": 67,
+    "size": [
+      1920,
+      1200
+    ],
+    "ground_cap": 46.0,
+    "eye_height": 1.7,
+    "mesh_sha256": "a09e44458025706f155fed88e66ab80e35b41e96a92d0d0afc205db2d67bc257",
+    "rasterizer": "WebGL depth test and perspective near clipping; exact exported mesh; model-only view",
+    "coordinate_convention": "x east, y up, z north; right=cross(up_reference,forward)"
+  },
+  "valley-lower-lake-bank": {
+    "position": [
+      100,
+      57.7,
+      100
+    ],
+    "target": [
+      385,
+      230,
+      608
+    ],
+    "projection": "perspective",
+    "horizontal_fov_degrees": 67,
+    "size": [
+      1920,
+      1200
+    ],
+    "ground_cap": 56.0,
+    "eye_height": 1.7,
+    "mesh_sha256": "a09e44458025706f155fed88e66ab80e35b41e96a92d0d0afc205db2d67bc257",
+    "rasterizer": "WebGL depth test and perspective near clipping; exact exported mesh; model-only view",
+    "coordinate_convention": "x east, y up, z north; right=cross(up_reference,forward)"
+  },
+  "valley-waterfall-approach": {
+    "position": [
+      450,
+      49.7,
+      280
+    ],
+    "target": [
+      445,
+      220,
+      560
+    ],
+    "projection": "perspective",
+    "horizontal_fov_degrees": 67,
+    "size": [
+      1920,
+      1200
+    ],
+    "ground_cap": 48.0,
+    "eye_height": 1.7,
+    "mesh_sha256": "a09e44458025706f155fed88e66ab80e35b41e96a92d0d0afc205db2d67bc257",
+    "rasterizer": "WebGL depth test and perspective near clipping; exact exported mesh; model-only view",
+    "coordinate_convention": "x east, y up, z north; right=cross(up_reference,forward)"
+  },
+  "shared-topology-r02": {
+    "projection": "orthographic",
+    "position": [
+      1900,
+      2350,
+      -3450
+    ],
+    "target": [
+      -490,
+      100,
+      -195
+    ],
+    "span": 4100,
+    "size": [
+      2400,
+      1800
+    ],
+    "coordinate_convention": "x east, y up, z north; right=cross(up_reference,forward)",
+    "mesh_sha256": "a09e44458025706f155fed88e66ab80e35b41e96a92d0d0afc205db2d67bc257"
+  },
+  "mainland": {
+    "projection": "orthographic",
+    "position": [
+      1450,
+      1650,
+      -2300
+    ],
+    "target": [
+      -10,
+      110,
+      170
+    ],
+    "span": 2350,
+    "filter": "mainland",
+    "size": [
+      2400,
+      1800
+    ],
+    "coordinate_convention": "x east, y up, z north; right=cross(up_reference,forward)",
+    "mesh_sha256": "a09e44458025706f155fed88e66ab80e35b41e96a92d0d0afc205db2d67bc257"
+  },
+  "crystal-frozen-cutaway": {
+    "projection": "orthographic",
+    "position": [
+      170,
+      530,
+      60
+    ],
+    "target": [
+      -120,
+      145,
+      660
+    ],
+    "span": 690,
+    "filter": "cutaway",
+    "size": [
+      2400,
+      1800
+    ],
+    "coordinate_convention": "x east, y up, z north; right=cross(up_reference,forward)",
+    "mesh_sha256": "a09e44458025706f155fed88e66ab80e35b41e96a92d0d0afc205db2d67bc257"
+  },
+  "volcano-route": {
+    "projection": "orthographic",
+    "position": [
+      -878.4449999999999,
+      660,
+      -221.63599999999997
+    ],
+    "target": [
+      -1638.445,
+      75,
+      -971.636
+    ],
+    "span": 1030,
+    "filter": "volcano",
+    "size": [
+      2400,
+      1800
+    ],
+    "coordinate_convention": "x east, y up, z north; right=cross(up_reference,forward)",
+    "mesh_sha256": "a09e44458025706f155fed88e66ab80e35b41e96a92d0d0afc205db2d67bc257"
+  },
+  "overhead-unlabeled": {
+    "projection": "orthographic",
+    "position": [
+      -490,
+      5000,
+      -195
+    ],
+    "target": [
+      -490,
+      0,
+      -195
+    ],
+    "up_reference": [
+      0,
+      0,
+      1
+    ],
+    "span": 4000,
+    "size": [
+      2400,
+      1800
+    ],
+    "coordinate_convention": "x east, y up, z north; right=cross(up_reference,forward)",
+    "mesh_sha256": "a09e44458025706f155fed88e66ab80e35b41e96a92d0d0afc205db2d67bc257"
+  }
+}

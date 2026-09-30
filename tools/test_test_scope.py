@@ -266,12 +266,33 @@ class TestScopeTests(unittest.TestCase):
             ("map_generation", "map_contracts", "clippy", "docs", "shipping"),
         )
 
+    def test_schematic_planner_stays_in_its_pure_tooling_partition(self) -> None:
+        for path in (
+            "crates/hex_schematic/src/generator.rs",
+            "assets/config/schematics/grand-v3-template.ron",
+        ):
+            with self.subTest(path=path):
+                decision = self.classify(path)
+                self.assertFalse(decision.full)
+                self.assertEqual(
+                    decision.concerns,
+                    ("residual", "clippy", "docs"),
+                )
+                self.assertEqual(decision.unknown_files, ())
+                self.assertIn("schematic-planner", decision.matched_rules)
+
     def test_map_contract_test_change_is_narrow(self) -> None:
         decision = self.classify(
             "crates/hex_map/tests/contracts/publication.rs"
         )
         self.assertFalse(decision.full)
         self.assertEqual(decision.concerns, ("map_contracts", "clippy"))
+
+    def test_schematic_map_compiler_contract_selects_generation(self) -> None:
+        decision = self.classify("crates/hex_map/tests/schematic_compile.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(decision.concerns, ("map_generation", "clippy"))
+        self.assertIn("schematic-map-compiler-contract", decision.matched_rules)
 
     def test_map_publication_selects_unit_and_contract_evidence(self) -> None:
         decision = self.classify("crates/hex_map/src/grid.rs")
@@ -441,6 +462,28 @@ class TestScopeTests(unittest.TestCase):
         self.assertFalse(decision.full)
         self.assertEqual(decision.concerns, ("selector",))
 
+    def test_review_tool_changes_select_their_python_contracts(self) -> None:
+        for path in (
+            "tools/review.py",
+            "tools/test_review.py",
+            "tools/run_grand_v3_structural_review.sh",
+        ):
+            with self.subTest(path=path):
+                decision = self.classify(path)
+                self.assertFalse(decision.full)
+                self.assertEqual(decision.concerns, ("selector",))
+
+        self.assertEqual(
+            self.config["concerns"]["selector"]["command"],
+            [
+                "python3",
+                "-m",
+                "unittest",
+                "tools/test_test_scope.py",
+                "tools/test_review.py",
+            ],
+        )
+
     def test_scope_engine_change_runs_everything(self) -> None:
         decision = self.classify("tools/test_scope.py")
         self.assertTrue(decision.full)
@@ -533,6 +576,9 @@ class TestScopeTests(unittest.TestCase):
             self.assertEqual(command[command.index("--package") + 1], "hex_map")
         self.assertIn("--lib", unit)
         self.assertIn("--lib", generation)
+        self.assertEqual(
+            generation[generation.index("--test") + 1], "schematic_compile"
+        )
         self.assertEqual(contracts[contracts.index("--test") + 1], "contracts")
 
     def test_map_partition_contract_uses_identities_not_frozen_counts(self) -> None:
@@ -544,6 +590,10 @@ class TestScopeTests(unittest.TestCase):
         self.assertIn(
             "*procedural_v3::crystal_ascent::tests::"
             "crystal_ascent_boundary_rise_benchmark_tracks_timing_and_plan_counts",
+            patterns,
+        )
+        self.assertIn(
+            "*grand_v3_full_world_release_corpus_compiles_32_seeds",
             patterns,
         )
         self.assertEqual(

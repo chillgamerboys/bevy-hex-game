@@ -16,6 +16,7 @@ impl Fixture {
         let geometry = ArenaVoxelGeometry::default();
         let materials = ArenaMaterials {
             stone: SubstanceId(1),
+            reinforced_stone: None,
             bedrock: SubstanceId(2),
             grass: SubstanceId(3),
             dirt: SubstanceId(4),
@@ -185,20 +186,39 @@ fn both_actor_identities_reach_full_charge_in_exactly_ninety_fixed_ticks() {
 }
 
 #[test]
-fn cooldown_press_does_not_arm_later_when_held_until_ready() {
+fn cooldown_held_fireball_charges_only_after_ready() {
     let mut f = Fixture::new();
     f.session.actors.first_mut().expect("human").cooldowns = [0.0, 0.2, 0.0];
-    f.hold(90, Spell::Fireball, Vec3::Y);
+    f.hold(12, Spell::Fireball, Vec3::Y);
+    assert!(f.actor().charge().is_none());
+    for _ in 0..18 {
+        f.tick(ActorIntent {
+            aim: Vec3::Y,
+            cast_held: true,
+            ..Default::default()
+        });
+    }
+    let charge = f.actor().charge().expect("hold arms once cooldown expires");
+    assert!(charge.elapsed > 0.0 && charge.elapsed < 0.08);
+    f.release(Vec3::Y);
+    assert_eq!(f.session.projectiles.len(), 1);
+}
+
+#[test]
+fn cancelled_cooldown_hold_cannot_rearm() {
+    let mut f = Fixture::new();
+    f.session.actors.first_mut().expect("human").cooldowns = [0.0, 0.2, 0.0];
+    f.hold(4, Spell::Fireball, Vec3::Y);
+    f.session.cancel_charges();
+    for _ in 0..90 {
+        f.tick(ActorIntent {
+            cast_held: true,
+            ..Default::default()
+        });
+    }
     assert!(f.actor().charge().is_none());
     f.release(Vec3::Y);
     assert!(f.session.projectiles.is_empty());
-    f.tick(ActorIntent {
-        aim: Vec3::Y,
-        cast_pressed: true,
-        cast_released: true,
-        ..Default::default()
-    });
-    assert_eq!(f.session.projectiles.len(), 1);
 }
 
 #[test]
@@ -224,26 +244,23 @@ fn cancellation_without_a_physics_tick_requires_fresh_press_and_spends_no_cooldo
 }
 
 #[test]
-fn switching_spell_cancels_the_hold_and_area_blast_still_requires_release() {
+fn high_jump_preserves_a_held_fireball_and_spends_only_its_own_cooldown() {
     let mut f = Fixture::new();
     f.hold(30, Spell::Fireball, Vec3::Y);
-    f.tick(ActorIntent {
-        selected: Some(Spell::AreaBlast),
+    let elapsed = f.actor().charge().expect("held fireball").elapsed;
+    let out = f.tick(ActorIntent {
+        high_jump: true,
         cast_held: true,
+        aim: Vec3::Y,
         ..Default::default()
     });
-    assert!(f.actor().charge().is_none());
-    assert!(f.release(Vec3::Y).impacts.is_empty());
-    assert!(f.session.projectiles.is_empty());
-    f.hold(240, Spell::AreaBlast, Vec3::Y);
-    assert!(f.session.effects.is_empty());
-    let out = f.release(Vec3::Y);
-    assert_eq!(out.impacts.len(), 1);
-    let effect = f.session.effects.first().expect("fixed blast effect");
-    assert_eq!(effect.kind, Spell::AreaBlast);
-    assert!((effect.radius - f.tuning.blast_radius()).abs() < SKIN);
-    assert!((f.actor().hp - 100.0).abs() < SKIN);
+    assert!(out.impacts.is_empty() && out.edits.is_empty());
+    assert_eq!(f.actor().selected, Spell::Fireball);
+    assert!(f.actor().charge().expect("same charge").elapsed > elapsed);
     assert!((f.actor().cooldowns.get(2).copied().unwrap_or_default() - 7.0).abs() < SKIN);
+    assert!(f.actor().impulse_velocity().y > 10.0);
+    f.release(Vec3::Y);
+    assert_eq!(f.session.projectiles.len(), 1);
 }
 
 #[test]
@@ -335,7 +352,7 @@ fn charge_tuning_rejects_invalid_values_and_reference_duration_is_consistent() {
 }
 
 #[test]
-fn lethal_incoming_fireball_cancels_queued_area_blast_without_spending_cooldown() {
+fn lethal_incoming_fireball_cancels_queued_fireball_without_spending_cooldown() {
     let mut f = Fixture::new();
     let human_feet = f.actor().feet;
     f.session.actors.first_mut().expect("human").hp = 1.0;
@@ -346,14 +363,13 @@ fn lethal_incoming_fireball_cancels_queued_area_blast_without_spending_cooldown(
             .iter_mut()
             .find(|actor| actor.id == 1)
             .expect("bot");
-        // Outside fireball splash, but inside the human's Area Blast. An
-        // incorrectly admitted retaliatory blast would turn this win into a draw.
+        // Outside incoming self-splash; death must cancel the held return shot.
         bot.feet = human_feet + Vec3::X * 3.5;
         bot.previous_feet = bot.feet;
         bot.aim = Vec3::NEG_X;
         bot.hp = 1.0;
     }
-    f.hold(1, Spell::AreaBlast, Vec3::X);
+    f.hold(1, Spell::Fireball, Vec3::X);
     assert!(f.actor().charge().is_some());
     let mut launch = CommandsOut::default();
     f.session.release(
@@ -384,7 +400,7 @@ fn lethal_incoming_fireball_cancels_queued_area_blast_without_spending_cooldown(
     assert!(f
         .actor()
         .cooldowns
-        .get(Spell::AreaBlast.index())
+        .get(Spell::Fireball.index())
         .is_some_and(|value| value.abs() < SKIN));
     assert_eq!(
         out.impacts.len(),
@@ -394,7 +410,7 @@ fn lethal_incoming_fireball_cancels_queued_area_blast_without_spending_cooldown(
     assert_eq!(f.session.effects.len(), 1);
     assert_eq!(
         f.session.effects.first().expect("incoming impact").kind,
-        Spell::Fireball
+        crate::VisualEffectKind::Fireball
     );
     let bot = f
         .session

@@ -16,6 +16,44 @@ fn recipe(map: ArenaMap) -> worlds::WorldRecipe {
     .expect("accepted real world builds")
 }
 
+#[test]
+fn water_lab_publishes_exact_bounded_water_and_supported_dry_start() {
+    let first = recipe(ArenaMap::WaterLab);
+    let second = recipe(ArenaMap::WaterLab);
+    assert_eq!(first.map.len(), 3283);
+    assert_eq!(first.view.voxels, second.view.voxels);
+    assert_eq!(first.view.liquids, second.view.liquids);
+    assert!(first.view.liquids.len() > 2500);
+    assert!(first.view.static_spans.is_empty());
+    let [start, _] = first.view.spawns;
+    let support = first
+        .geometry
+        .voxel_at(start - Vec3::Y * 0.001)
+        .expect("finite start");
+    assert!(first.view.voxels.contains_key(&support));
+    assert!(!first
+        .view
+        .liquids
+        .iter()
+        .any(|span| span.bottom.coord == support.coord));
+    assert!(first
+        .map
+        .columns()
+        .all(|(coord, _)| crate::water_lab::contains(coord)));
+    for span in &first.view.liquids {
+        let bed = span.bottom.below();
+        assert!(first.view.voxels.contains_key(&bed));
+        assert!(
+            (first
+                .geometry
+                .top(TilePos::new(span.bottom.coord, span.top_level))
+                - crate::water_lab::SEA_LEVEL)
+                .abs()
+                < 0.00001
+        );
+    }
+}
+
 fn seven() -> &'static worlds::WorldRecipe {
     static RECIPE: OnceLock<worlds::WorldRecipe> = OnceLock::new();
     RECIPE.get_or_init(|| recipe(ArenaMap::SevenRegions))
@@ -407,4 +445,100 @@ fn physical_damage_respects_real_world_object_and_liquid_protection() {
     );
     assert_eq!(map.get(pos), before);
     assert!(health.iter().next().is_none());
+}
+
+/// Exact-map logical evidence; renderer inspection is a separate checkpoint.
+#[test]
+#[ignore = "requires the current compiled expedition package"]
+fn finite_expedition_blast_carves_objects_bedrock_and_preserves_water_then_resets() {
+    let mut app = App::new();
+    app.insert_resource(ArenaSelection {
+        map: ArenaMap::ForestMassif,
+        ..default()
+    })
+    .add_plugins(MinimalPlugins)
+    .add_plugins(plugin);
+    app.update();
+    let view = app.world().resource::<ArenaTerrainView>();
+    assert!(view.expedition.is_some());
+    assert_eq!(
+        view.expedition.as_ref().expect("sites").encounters.len(),
+        25
+    );
+    for (coord, intervals) in &view.edit_protected {
+        for (bottom, top) in intervals {
+            assert!(
+                (*bottom..=*top).all(|level| view.solid_at(TilePos::new(*coord, level)).is_none()),
+                "only liquid cells remain protected"
+            );
+        }
+    }
+    let object = view
+        .object_columns
+        .values()
+        .flatten()
+        .map(|span| span.bottom)
+        .find(|pos| !view.voxels.contains_key(pos))
+        .expect("authored object above terrain");
+    let bedrock = TilePos::new(HexCoord::ORIGIN, 0);
+    let water = view.liquids.first().expect("river").bottom;
+    let original_object = view.solid_at(object).expect("object material");
+    let original_bedrock = view.solid_at(bedrock).expect("foundation material");
+    let original_water = app.world().resource::<VoxelMap>().get(water);
+    let mut volume = vec![object, bedrock, water];
+    volume.sort_unstable();
+    let impact = TerrainImpact {
+        batch: TerrainBatchId(900),
+        volume,
+        kind: TerrainDamageKind::Physical,
+        power: 8,
+    };
+    app.world_mut().write_message(impact.clone());
+    app.world_mut().run_schedule(ArenaTick);
+    let view = app.world().resource::<ArenaTerrainView>();
+    assert!(view.solid_at(object).is_none());
+    assert!(view.solid_at(bedrock).is_none());
+    assert!(!view
+        .static_spans
+        .iter()
+        .any(|span| span.bottom.coord == object.coord
+            && (span.bottom.level..=span.top_level).contains(&object.level)));
+    assert!(view.dirty_columns.contains(&object.coord));
+    assert_eq!(
+        app.world().resource::<VoxelMap>().get(water),
+        original_water
+    );
+    let masks = &app
+        .world()
+        .resource::<ArenaWorldState>()
+        .forest
+        .as_ref()
+        .expect("forest")
+        .masks;
+    assert!(masks.values().any(|mask| !mask.removed.is_empty()));
+    let revision = view.revision;
+    app.world_mut().write_message(impact);
+    app.world_mut().run_schedule(ArenaTick);
+    assert_eq!(
+        app.world().resource::<ArenaTerrainView>().revision,
+        revision,
+        "duplicate batch is inert"
+    );
+    app.world_mut().resource_mut::<ArenaReset>().generation += 1;
+    app.world_mut().run_schedule(ArenaTick);
+    let view = app.world().resource::<ArenaTerrainView>();
+    assert_eq!(view.solid_at(object), Some(original_object));
+    assert_eq!(view.solid_at(bedrock), Some(original_bedrock));
+    assert_eq!(
+        app.world().resource::<VoxelMap>().get(water),
+        original_water
+    );
+    assert!(app
+        .world()
+        .resource::<ArenaWorldState>()
+        .forest
+        .as_ref()
+        .expect("forest")
+        .masks
+        .is_empty());
 }

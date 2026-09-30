@@ -190,8 +190,152 @@ pub fn terrain_and_authored_object_sight_is_clear(
         observer_support,
         target_surface,
         terrain,
-        Some(authored_objects),
+        (!authored_objects.is_empty()).then_some(authored_objects),
     )
+}
+
+/// Borrowed dense axial window for repeated exact sight queries.
+///
+/// Perception resolves thousands of nearby targets against one immutable occupancy
+/// snapshot. Preparing that local rectangle pays each ordered-map lookup once while
+/// retaining the original compact runs verbatim. Queries outside the window fall
+/// back to the authoritative resources, so this cache can change cost but never LOS
+/// semantics or failure behavior.
+#[derive(Debug)]
+pub struct SightOccupancyCache<'a> {
+    terrain: &'a TerrainOccupancy,
+    authored_objects: &'a AuthoredObjectOccupancy,
+    minimum: HexCoord,
+    q_len: usize,
+    r_len: usize,
+    terrain_columns: Vec<&'a [(Level, Level)]>,
+    authored_columns: Vec<&'a [(Level, Level)]>,
+}
+
+impl<'a> SightOccupancyCache<'a> {
+    /// Prepares an inclusive axial rectangle, bounded by `maximum_columns`.
+    ///
+    /// Returns `None` for inverted bounds, unrepresentable dimensions, or a window
+    /// above the caller's allocation budget. Callers then use the uncached exact
+    /// query. Empty authored occupancy consumes no per-column cache storage.
+    #[must_use]
+    pub fn try_new(
+        terrain: &'a TerrainOccupancy,
+        authored_objects: &'a AuthoredObjectOccupancy,
+        minimum: HexCoord,
+        maximum: HexCoord,
+        maximum_columns: usize,
+    ) -> Option<Self> {
+        let q_len = i64::from(maximum.x())
+            .checked_sub(i64::from(minimum.x()))?
+            .checked_add(1)?;
+        let r_len = i64::from(maximum.y())
+            .checked_sub(i64::from(minimum.y()))?
+            .checked_add(1)?;
+        if q_len <= 0 || r_len <= 0 {
+            return None;
+        }
+        let q_len = usize::try_from(q_len).ok()?;
+        let r_len = usize::try_from(r_len).ok()?;
+        let column_count = q_len.checked_mul(r_len)?;
+        if column_count > maximum_columns {
+            return None;
+        }
+
+        let mut terrain_columns = Vec::with_capacity(column_count);
+        let mut authored_columns = if authored_objects.is_empty() {
+            Vec::new()
+        } else {
+            Vec::with_capacity(column_count)
+        };
+        for q_offset in 0..q_len {
+            let q = i64::from(minimum.x()).checked_add(i64::try_from(q_offset).ok()?)?;
+            let q = i32::try_from(q).ok()?;
+            for r_offset in 0..r_len {
+                let r = i64::from(minimum.y()).checked_add(i64::try_from(r_offset).ok()?)?;
+                let coord = HexCoord::from_axial(q, i32::try_from(r).ok()?);
+                terrain_columns.push(terrain.column_runs(coord));
+                if !authored_objects.is_empty() {
+                    authored_columns.push(authored_objects.column_runs(coord));
+                }
+            }
+        }
+        Some(Self {
+            terrain,
+            authored_objects,
+            minimum,
+            q_len,
+            r_len,
+            terrain_columns,
+            authored_columns,
+        })
+    }
+
+    fn index(&self, coord: HexCoord) -> Option<usize> {
+        let q_offset = i64::from(coord.x()).checked_sub(i64::from(self.minimum.x()))?;
+        let r_offset = i64::from(coord.y()).checked_sub(i64::from(self.minimum.y()))?;
+        let q_offset = usize::try_from(q_offset).ok()?;
+        let r_offset = usize::try_from(r_offset).ok()?;
+        if q_offset >= self.q_len || r_offset >= self.r_len {
+            return None;
+        }
+        q_offset.checked_mul(self.r_len)?.checked_add(r_offset)
+    }
+
+    fn terrain_runs(&self, coord: HexCoord) -> &[(Level, Level)] {
+        self.index(coord)
+            .and_then(|index| self.terrain_columns.get(index).copied())
+            .unwrap_or_else(|| self.terrain.column_runs(coord))
+    }
+
+    fn authored_runs(&self, coord: HexCoord) -> &[(Level, Level)] {
+        if self.authored_columns.is_empty() {
+            return &[];
+        }
+        self.index(coord)
+            .and_then(|index| self.authored_columns.get(index).copied())
+            .unwrap_or_else(|| self.authored_objects.column_runs(coord))
+    }
+}
+
+/// Cached form of [`terrain_and_authored_object_sight_is_clear`].
+///
+/// Geometry, low-cover treatment, paired rays, strict-interior intersection, and
+/// early exits are shared with the uncached path; only compact-run lookup differs.
+#[must_use]
+pub fn terrain_and_authored_object_sight_is_clear_cached(
+    observer_support: TilePos,
+    target_surface: TilePos,
+    cache: &SightOccupancyCache<'_>,
+) -> bool {
+    let terrain = CachedTerrain(cache);
+    if cache.authored_objects.is_empty() {
+        sight_bundle_is_clear_with(
+            observer_support,
+            target_surface,
+            &terrain,
+            None::<&CachedAuthored<'_>>,
+        )
+    } else {
+        let authored = CachedAuthored(cache);
+        sight_bundle_is_clear_with(observer_support, target_surface, &terrain, Some(&authored))
+    }
+}
+
+struct CachedTerrain<'a>(&'a SightOccupancyCache<'a>);
+
+impl SightRunOccupancy for CachedTerrain<'_> {
+    fn column_runs(&self, coord: HexCoord) -> &[(Level, Level)] {
+        self.0.terrain_runs(coord)
+    }
+}
+
+struct CachedAuthored<'a>(&'a SightOccupancyCache<'a>);
+
+impl SightRunOccupancy for CachedAuthored<'_> {
+    fn column_runs(&self, coord: HexCoord) -> &[(Level, Level)] {
+        self.0.authored_runs(coord)
+    }
 }
 
 fn sight_bundle_is_clear(
@@ -200,6 +344,19 @@ fn sight_bundle_is_clear(
     terrain: &TerrainOccupancy,
     authored_objects: Option<&AuthoredObjectOccupancy>,
 ) -> bool {
+    sight_bundle_is_clear_with(observer_support, target_surface, terrain, authored_objects)
+}
+
+fn sight_bundle_is_clear_with<Terrain, Authored>(
+    observer_support: TilePos,
+    target_surface: TilePos,
+    terrain: &Terrain,
+    authored_objects: Option<&Authored>,
+) -> bool
+where
+    Terrain: SightRunOccupancy,
+    Authored: SightRunOccupancy,
+{
     let eye = ExactGridPoint::standing_eye(observer_support);
     let corridor = sight_candidate_columns(observer_support.coord, target_surface.coord);
     let low_cover_band = (
@@ -248,21 +405,14 @@ fn sight_bundle_is_clear(
 fn combined_sight_segment_is_clear(
     source: ExactGridPoint,
     destination: ExactGridPoint,
-    terrain: &TerrainOccupancy,
-    authored_objects: Option<&AuthoredObjectOccupancy>,
+    terrain: &impl SightRunOccupancy,
+    authored_objects: Option<&impl SightRunOccupancy>,
     corridor: &[HexCoord],
     low_cover_band: (Level, Level),
 ) -> bool {
     sight_segment_is_clear_in_corridor(source, destination, terrain, corridor, Some(low_cover_band))
         && authored_objects.is_none_or(|occupancy| {
-            occupancy.is_empty()
-                || sight_segment_is_clear_in_corridor(
-                    source,
-                    destination,
-                    occupancy,
-                    corridor,
-                    None,
-                )
+            sight_segment_is_clear_in_corridor(source, destination, occupancy, corridor, None)
         })
 }
 
@@ -729,6 +879,87 @@ mod tests {
                 .map(|pos| hex_core::AuthoredObjectVoxelRun::new(pos, pos.level)),
         )
         .expect("single-voxel authored runs are valid")
+    }
+
+    #[test]
+    fn cached_sight_window_is_exactly_equivalent_to_authoritative_lookup() {
+        let terrain = TerrainOccupancy::from_runs([
+            (at(-3, 1, 4), RunBottom(0)),
+            (at(-1, 0, 2), RunBottom(-2)),
+            (at(0, 0, 0), RunBottom(-4)),
+            (at(1, -1, 5), RunBottom(1)),
+            (at(2, 0, 3), RunBottom(2)),
+            (at(4, -2, 8), RunBottom(6)),
+        ])
+        .expect("mixed terrain runs");
+        let authored = AuthoredObjectOccupancy::from_runs([
+            hex_core::AuthoredObjectVoxelRun::new(at(0, 1, 6), 1),
+            hex_core::AuthoredObjectVoxelRun::new(at(3, -1, 4), 2),
+        ])
+        .expect("mixed authored runs");
+        let cache = SightOccupancyCache::try_new(
+            &terrain,
+            &authored,
+            HexCoord::from_axial(-8, -8),
+            HexCoord::from_axial(8, 8),
+            17 * 17,
+        )
+        .expect("bounded cache");
+        let fallback_cache = SightOccupancyCache::try_new(
+            &terrain,
+            &authored,
+            HexCoord::ORIGIN,
+            HexCoord::ORIGIN,
+            1,
+        )
+        .expect("single-column cache");
+
+        for observer in [at(-4, 2, 1), at(0, -2, 3), at(5, -3, 7)] {
+            for coord in HexCoord::ORIGIN.within_radius(6) {
+                for level in -2..=9 {
+                    let target = TilePos::new(coord, level);
+                    let expected = terrain_and_authored_object_sight_is_clear(
+                        observer, target, &terrain, &authored,
+                    );
+                    assert_eq!(
+                        terrain_and_authored_object_sight_is_clear_cached(observer, target, &cache,),
+                        expected,
+                        "dense cache changed {observer:?} -> {target:?}"
+                    );
+                    assert_eq!(
+                        terrain_and_authored_object_sight_is_clear_cached(
+                            observer,
+                            target,
+                            &fallback_cache,
+                        ),
+                        expected,
+                        "fallback lookup changed {observer:?} -> {target:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sight_window_rejects_inverted_or_over_budget_bounds() {
+        let terrain = TerrainOccupancy::default();
+        let authored = AuthoredObjectOccupancy::default();
+        assert!(SightOccupancyCache::try_new(
+            &terrain,
+            &authored,
+            HexCoord::from_axial(1, 0),
+            HexCoord::ORIGIN,
+            10,
+        )
+        .is_none());
+        assert!(SightOccupancyCache::try_new(
+            &terrain,
+            &authored,
+            HexCoord::from_axial(-2, -2),
+            HexCoord::from_axial(2, 2),
+            24,
+        )
+        .is_none());
     }
 
     fn rotate_clockwise(mut coord: HexCoord, rotations: u8) -> HexCoord {

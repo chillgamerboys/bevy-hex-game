@@ -152,8 +152,111 @@ pub(crate) trait V3Recipe {
 /// Opaque proof that common and recipe-specific validation admitted a plan.
 #[derive(Debug)]
 pub(crate) struct ValidatedWorldPlan {
+    #[cfg(not(test))]
+    plan: GeneratedWorldPlan,
+    #[cfg(test)]
     pub(super) plan: GeneratedWorldPlan,
+    #[cfg(not(test))]
+    semantic_fingerprint: u64,
+    #[cfg(test)]
     pub(super) semantic_fingerprint: u64,
+    volume_admission: VolumeAdmission,
+}
+
+/// Sealed evidence that the volume passed complete-world validation.
+///
+/// Its field is private to this module, so sibling modules can consume an admitted
+/// plan but cannot manufacture the token needed by the unchecked volume projection
+/// path.
+#[derive(Debug)]
+pub(super) struct VolumeAdmission {
+    _private: (),
+}
+
+/// An owned world which passed complete-world validation but has not yet had
+/// its canonical semantic identity attached.
+#[derive(Debug)]
+pub(super) struct CompleteWorldAdmission {
+    plan: GeneratedWorldPlan,
+    volume_admission: VolumeAdmission,
+}
+
+impl ValidatedWorldPlan {
+    fn from_admitted_parts(plan: GeneratedWorldPlan, semantic_fingerprint: u64) -> Self {
+        Self {
+            plan,
+            semantic_fingerprint,
+            volume_admission: VolumeAdmission { _private: () },
+        }
+    }
+
+    /// Performs complete-world validation and seals the resulting owned plan.
+    pub(super) fn validate_complete(
+        plan: GeneratedWorldPlan,
+    ) -> Result<CompleteWorldAdmission, V3GenerationError> {
+        let issues = plan.validate();
+        if !issues.is_empty() {
+            return Err(V3GenerationError::InvalidFallback(issues));
+        }
+        Ok(CompleteWorldAdmission {
+            plan,
+            volume_admission: VolumeAdmission { _private: () },
+        })
+    }
+
+    /// Performs complete-world validation for the Grand Schematic compiler
+    /// while consuming its sealed construction evidence.
+    ///
+    /// Only the already-validated immutable layout, the layout-derived mask
+    /// connectivity, and the final reconciled interior projection are reused.
+    /// Every other common validation pass remains identical to
+    /// [`Self::validate_complete`].
+    pub(super) fn validate_grand_construction(
+        admission: super::schematic::GrandWorldConstructionAdmission,
+    ) -> Result<CompleteWorldAdmission, V3GenerationError> {
+        let plan = admission.into_plan();
+        let issues = plan.validate_grand_construction_admitted();
+        if !issues.is_empty() {
+            return Err(V3GenerationError::InvalidFallback(issues));
+        }
+        Ok(CompleteWorldAdmission {
+            plan,
+            volume_admission: VolumeAdmission { _private: () },
+        })
+    }
+
+    /// Borrows the immutable admitted semantic plan.
+    pub(super) fn plan(&self) -> &GeneratedWorldPlan {
+        &self.plan
+    }
+
+    /// Returns the canonical semantic identity attached at admission.
+    pub(super) const fn semantic_fingerprint(&self) -> u64 {
+        self.semantic_fingerprint
+    }
+
+    /// Borrows the sealed evidence required by unchecked volume projection.
+    pub(super) const fn volume_admission(&self) -> &VolumeAdmission {
+        &self.volume_admission
+    }
+
+    /// Consumes the proof after every admission-gated projection has completed.
+    pub(super) fn into_parts(self) -> (GeneratedWorldPlan, u64) {
+        (self.plan, self.semantic_fingerprint)
+    }
+}
+
+impl CompleteWorldAdmission {
+    /// Attaches canonical identity without reopening the validated owned world.
+    pub(super) fn fingerprint(self) -> Result<ValidatedWorldPlan, V3GenerationError> {
+        let semantic_fingerprint =
+            semantic_plan_fingerprint(&self.plan).map_err(V3GenerationError::Fingerprint)?;
+        Ok(ValidatedWorldPlan {
+            plan: self.plan,
+            semantic_fingerprint,
+            volume_admission: self.volume_admission,
+        })
+    }
 }
 
 /// Selected complete world plus deterministic runner provenance.
@@ -245,10 +348,7 @@ where
         let semantic_fingerprint =
             semantic_plan_fingerprint(&selected.plan).map_err(V3GenerationError::Fingerprint)?;
         return Ok(ValidatedWorldSelection {
-            validated: ValidatedWorldPlan {
-                plan: selected.plan,
-                semantic_fingerprint,
-            },
+            validated: ValidatedWorldPlan::from_admitted_parts(selected.plan, semantic_fingerprint),
             metrics: selected.metrics,
             selected_candidate: Some(selected.candidate),
             candidates_evaluated: CANDIDATE_COUNT,
@@ -273,10 +373,7 @@ where
     notes.push(CandidateNote::FallbackSelected);
 
     Ok(ValidatedWorldSelection {
-        validated: ValidatedWorldPlan {
-            plan: fallback,
-            semantic_fingerprint,
-        },
+        validated: ValidatedWorldPlan::from_admitted_parts(fallback, semantic_fingerprint),
         metrics,
         selected_candidate: None,
         candidates_evaluated: CANDIDATE_COUNT,
@@ -407,6 +504,7 @@ mod tests {
     struct MockSettings {
         force_fallback: bool,
         invalid_fallback: bool,
+        common_invalid: bool,
         repairs_before_valid: u8,
         no_change_mutates: bool,
         changed_without_mutation: bool,
@@ -418,6 +516,7 @@ mod tests {
     #[derive(Default)]
     struct MockRecipe {
         constructions: Cell<u8>,
+        validations: Cell<u8>,
         repair_calls: Cell<u8>,
         fallback_calls: Cell<u8>,
     }
@@ -447,7 +546,11 @@ mod tests {
                     V3GenerationError::RecipeContract("construction exploded".to_owned()),
                 ));
             }
-            Ok(mock_plan(0, false))
+            let mut plan = mock_plan(0, false);
+            if settings.common_invalid {
+                plan.biome_regions.clear();
+            }
+            Ok(plan)
         }
 
         fn validate(
@@ -455,6 +558,8 @@ mod tests {
             settings: &Self::Settings,
             plan: &GeneratedWorldPlan,
         ) -> WorldValidation<Self::Metrics> {
+            self.validations
+                .set(self.validations.get().saturating_add(1));
             let marker = marker(plan);
             let fallback = marker == u8::MAX;
             if (fallback && settings.invalid_fallback)
@@ -513,7 +618,7 @@ mod tests {
         fn canonical_fallback(
             &self,
             context: FallbackContext,
-            _settings: &Self::Settings,
+            settings: &Self::Settings,
         ) -> Result<GeneratedWorldPlan, V3GenerationError> {
             if context.grid_radius != 12 {
                 return Err(V3GenerationError::RecipeContract(
@@ -522,7 +627,11 @@ mod tests {
             }
             self.fallback_calls
                 .set(self.fallback_calls.get().saturating_add(1));
-            Ok(mock_plan(u8::MAX, true))
+            let mut plan = mock_plan(u8::MAX, true);
+            if settings.common_invalid {
+                plan.biome_regions.clear();
+            }
+            Ok(plan)
         }
     }
 
@@ -569,6 +678,7 @@ mod tests {
             },
         );
         GeneratedWorldPlan {
+            source_schematic_fingerprint: None,
             layout,
             volume,
             liquids: LiquidPlan::default(),
@@ -587,6 +697,7 @@ mod tests {
                 }
                 anchors
             },
+            observation_anchors: BTreeMap::new(),
             view_hint: MapViewHint::new((1.0, 2.0, 1.0), (0.0, 0.0, 0.0)),
         }
     }
@@ -702,6 +813,33 @@ mod tests {
         .expect_err("fallback must pass hard validation");
 
         assert!(matches!(error, V3GenerationError::InvalidFallback(_)));
+    }
+
+    #[test]
+    fn common_validation_rejects_candidates_and_fallback_before_recipe_validation() {
+        let settings = MockSettings {
+            common_invalid: true,
+            ..Default::default()
+        };
+        let recipe = MockRecipe::default();
+        let mut proof = mock_plan(0, false);
+        proof.biome_regions.clear();
+        assert!(matches!(
+            recipe.validate(&settings, &proof),
+            WorldValidation::Valid(0)
+        ));
+        recipe.validations.set(0);
+
+        let error = run_recipe(&recipe, &settings, 12, 1)
+            .expect_err("the common-invalid fallback must fail closed");
+        assert!(matches!(error, V3GenerationError::InvalidFallback(_)));
+        assert_eq!(recipe.constructions.get(), CANDIDATE_COUNT);
+        assert_eq!(recipe.fallback_calls.get(), 1);
+        assert_eq!(
+            recipe.validations.get(),
+            0,
+            "recipe-specific validation must never admit a common-invalid plan"
+        );
     }
 
     #[test]

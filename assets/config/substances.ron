@@ -55,6 +55,15 @@
             toughness: Some(4),
         ),
 
+        // Grand Earth blesses only newly created structures. Existing stone stays tier4.
+        "reinforced_stone": (
+            swatch: Some("terrain/stone"),
+            solid: true,
+            diggable: true,
+            conjurable: true,
+            toughness: Some(8),
+        ),
+
         "gravel": (
             swatch: Some("terrain/gravel"),
             solid: true,

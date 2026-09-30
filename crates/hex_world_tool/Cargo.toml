@@ -1,0 +1,22 @@
+[package]
+name = "hex_world_tool"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Prebuilt V4 authoring, package inspection and world review commands."
+
+[[bin]]
+name = "worldc"
+path = "src/main.rs"
+
+[dependencies]
+atomicwrites = { workspace = true }
+hex_world_contracts = { path = "../hex_world_contracts" }
+hex_world_runtime = { path = "../hex_world_runtime" }
+hex_schematic = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+
+[lints]
+workspace = true

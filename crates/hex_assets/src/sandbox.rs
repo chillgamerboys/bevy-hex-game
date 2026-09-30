@@ -181,6 +181,75 @@ mod tests {
         assert_eq!(deep_forest.scenario, "Deep Forest");
         assert_eq!(deep_forest.fixed_seed, Some(1_592_598_566));
         assert_eq!(deep_forest.preview, "ui/sandbox/deep-forest.png");
+        for (id, scenario, preview) in [
+            (
+                "desert-transition",
+                "Desert Transition",
+                "ui/sandbox/desert-transition.png",
+            ),
+            (
+                "desert-plain",
+                "Desert Plain",
+                "ui/sandbox/desert-plain.png",
+            ),
+            ("dunes", "Dunes", "ui/sandbox/dunes.png"),
+            (
+                "desert-oasis-rings",
+                "Desert Oasis Rings",
+                "ui/sandbox/desert-oasis-rings.png",
+            ),
+        ] {
+            let map = catalog
+                .get(id)
+                .unwrap_or_else(|| panic!("{scenario} should be selectable in Sandbox"));
+            assert_eq!(map.scenario, scenario);
+            assert_eq!(map.fixed_seed, Some(1_592_598_566));
+            assert_eq!(map.preview, preview);
+            assert_eq!(
+                map.player_region.center,
+                SandboxRegionCenter::Anchor("party_start".to_owned())
+            );
+            assert_eq!(
+                map.hostile_region.center,
+                SandboxRegionCenter::Anchor("hostile_start".to_owned())
+            );
+        }
+        for (id, scenario, identifying_tag, preview) in [
+            (
+                "sandy-islets",
+                "Sandy Islets",
+                "Islands",
+                "ui/sandbox/sandy-islets.png",
+            ),
+            (
+                "wooded-island",
+                "Wooded Island",
+                "Forest",
+                "ui/sandbox/wooded-island.png",
+            ),
+            (
+                "ocean-archipelagoes",
+                "Ocean Archipelagoes",
+                "Archipelago",
+                "ui/sandbox/ocean-archipelagoes.png",
+            ),
+        ] {
+            let map = catalog
+                .get(id)
+                .unwrap_or_else(|| panic!("{scenario} should be selectable in Sandbox"));
+            assert_eq!(map.scenario, scenario);
+            assert_eq!(map.fixed_seed, Some(1_592_598_566));
+            assert_eq!(map.preview, preview);
+            assert_eq!(
+                map.player_region.center,
+                SandboxRegionCenter::Anchor("party_start".to_owned())
+            );
+            assert_eq!(
+                map.hostile_region.center,
+                SandboxRegionCenter::Anchor("hostile_start".to_owned())
+            );
+            assert!(map.tags.iter().any(|tag| tag == identifying_tag));
+        }
         assert!(catalog.get("fort").is_some());
         let crystal_ascent = catalog
             .get("crystal-ascent")
@@ -196,6 +265,20 @@ mod tests {
             crystal_ascent.hostile_region.center,
             SandboxRegionCenter::Anchor("crystal_ascent.upper_exit".to_owned())
         );
+        let crystal_mountain = catalog
+            .get("crystal-mountain")
+            .expect("Crystal Mountain should be selectable in Sandbox");
+        assert_eq!(crystal_mountain.scenario, "Crystal Mountain");
+        assert_eq!(crystal_mountain.fixed_seed, Some(1_592_598_566));
+        assert_eq!(crystal_mountain.preview, "ui/sandbox/crystal-mountain.png");
+        assert_eq!(
+            crystal_mountain.player_region.center,
+            SandboxRegionCenter::Anchor("crystal_mountain.foot_apron".to_owned())
+        );
+        assert_eq!(
+            crystal_mountain.hostile_region.center,
+            SandboxRegionCenter::Anchor("crystal_mountain.basin_clearing".to_owned())
+        );
         assert!(catalog.get("seven-regions").is_some());
         let two_rings = catalog
             .get("two-rings")
@@ -209,7 +292,57 @@ mod tests {
         assert_eq!(mountain_range.scenario, "Mountain Range");
         assert_eq!(mountain_range.fixed_seed, Some(129_704_046));
         assert_eq!(mountain_range.preview, "ui/sandbox/mountain-range.png");
-        assert_eq!(catalog.maps.len(), 18);
+        let grand_v3 = catalog
+            .get("grand-v3-baseline")
+            .expect("Grand V3 Baseline should be selectable in Sandbox");
+        assert_eq!(grand_v3.scenario, "Grand V3 Baseline");
+        assert_eq!(grand_v3.fixed_seed, Some(1_592_598_566));
+        assert_eq!(grand_v3.preview, "ui/sandbox/grand-v3-baseline.png");
+        assert_eq!(
+            grand_v3.player_region.center,
+            SandboxRegionCenter::Anchor("party_start".to_owned())
+        );
+        assert_eq!(
+            grand_v3.hostile_region.center,
+            SandboxRegionCenter::Anchor("grand_v3.natural_pass".to_owned())
+        );
+        assert_eq!(catalog.maps.len(), 27);
+        assert_eq!(
+            catalog
+                .maps
+                .iter()
+                .map(|map| map.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "flat-arena",
+                "the-crossing",
+                "procedural-hills",
+                "rolling-hills",
+                "frozen-hills",
+                "volcanic-hills",
+                "sky-islands",
+                "mountains",
+                "caves",
+                "waterfall",
+                "forest",
+                "deep-forest",
+                "prairie",
+                "desert-transition",
+                "desert-plain",
+                "dunes",
+                "desert-oasis-rings",
+                "sandy-islets",
+                "wooded-island",
+                "ocean-archipelagoes",
+                "fort",
+                "crystal-ascent",
+                "crystal-mountain",
+                "seven-regions",
+                "two-rings",
+                "mountain-range",
+                "grand-v3-baseline",
+            ]
+        );
 
         let scenarios: crate::ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))

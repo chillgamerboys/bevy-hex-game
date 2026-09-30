@@ -48,12 +48,14 @@ commands.spawn((
     span,          // HexSpan   — the run's world extent
     substance,     // SubstanceId
     headroom,      // Headroom  — clear voxels above the run, 0 if buried
-    Mesh3d(...), MeshMaterial3d(...), Transform { ... },
+    // Deliberately no scene, visibility, mesh, material, or picking components.
 ));
 ```
 
 Gameplay may query `(&TilePos, &RunBottom, &HexSpan, &SubstanceId, &Headroom)` with
-`With<HexTile>` and consumes exact projections such as `TraversalBlockers`.
+`With<HexTile>` and consumes exact projections such as `TraversalBlockers`. Disposable
+`TerrainRenderBatch` entities own transforms, visibility, meshes, materials, and picking;
+their pick metadata resolves a hit back to the exact logical run.
 `MapAnchors`, `BiomeRegions`, `InteriorRegions`, and view hints use the same shared,
 stack-safe pattern. `TerrainEdit` and `TerrainImpact` are the two live write
 interfaces: direct edits replace or clear material, while impacts resolve numeric
@@ -105,22 +107,26 @@ reconstructing a level from `HexSpan`, world transforms, `level_height`, or satu
 ### Storage is not rendering
 
 One entity per voxel would be tens of thousands on a deep map. The spawn pass merges
-vertical runs of the same substance into one prism, keeping the rendered entity count
-proportional to material bands rather than depth.
+vertical runs of the same substance into lightweight logical entities, then groups
+bounded sets of those runs into disposable render batches. Logical run count stays
+proportional to material bands rather than depth without placing those authoritative
+facts in Bevy's transform, visibility, culling, or picking graphs.
 
 Interior voxels therefore have **no entity**. That is why targeting is positional.
 
-### The transform must agree with the span
+### Rendered geometry must agree with the logical span
 
-A tile's `Transform` has to match the rendered run described by its span:
+A logical tile has no `Transform`; its exact world-space run is reconstructed from its
+coordinate and span:
 
-- `translation.y == span.centre()`
-- `scale.y == span.height()`
+- horizontal centre: `HexCoord::to_world(span.centre())`
+- vertical extent: `span.bottom..span.top`
 
-Gameplay reads `span.top` to place a piece on a surface. If the transform disagrees,
-pieces float or sink and **nothing errors** — the tiles still render. There is a test
-for this (`tests/contracts/presentation.rs::every_tile_transform_matches_its_span`); keep it
-passing.
+Gameplay reads the logical components, while `TerrainRenderBatch` builds vertices from
+that same geometry and owns the scene transform and visibility. If the batch geometry
+disagrees with the logical span, pieces float or sink and **nothing errors** — the
+terrain still renders. The presentation contract tests prove logical runs remain
+scene-free and that render batches cover each run exactly once; keep them passing.
 
 ## Voxels, columns, and the rule about them
 
@@ -154,8 +160,8 @@ The tests enforce these; they are here so you know *why*.
   bare bedrock is a permanent hole.
 - **Terrain edits preserve non-diggable voxels.** `Clear`, setting air, or replacing
   bedrock with another substance must all be rejected.
-- **A tile's transform agrees with its span.** Otherwise pieces float or sink and
-  *nothing errors*.
+- **Rendered batch geometry agrees with each logical tile's coordinate and span.**
+  Otherwise pieces float or sink and *nothing errors*.
 - **Air is never spawned as a prism.**
 - **A buried run reports zero headroom.** Anything else makes gameplay treat the
   inside of a column as a place to stand.
@@ -220,7 +226,7 @@ missing hook instead.
 | Symptom | Cause |
 |---|---|
 | Plain blue window | Assets not found — run through `cargo`, never the binary directly |
-| Tiles in the wrong place, no error | Transform disagrees with the span |
+| Tiles in the wrong place, no error | Render-batch geometry disagrees with the logical coordinate or span |
 | Stuck on "loading…" during initial startup | A settings file failed to parse -- for terrain, whichever world the chosen scenario names. The terminal names the file and line |
 | Perlin terrain differs every run | Its preset has `seed: None`. Set a number to reproduce it |
 | Tile scaled to nothing | A zero-height span. `HexSpan::new` refuses these; check you used it |

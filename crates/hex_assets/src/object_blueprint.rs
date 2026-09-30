@@ -15,11 +15,11 @@ use crate::art_palette::{ObjectAssetId, VoxelStyleCatalog, VoxelStyleId};
 /// Current on-disk schema understood by [`ObjectBlueprint`].
 pub const OBJECT_BLUEPRINT_SCHEMA_VERSION: u16 = 1;
 /// Largest horizontal authoring radius accepted by the editor contract.
-pub const MAX_OBJECT_RADIUS: u8 = 12;
+pub const MAX_OBJECT_RADIUS: u8 = 32;
 /// Largest number of vertical levels in one authoring canvas.
-pub const MAX_OBJECT_HEIGHT: u8 = 64;
+pub const MAX_OBJECT_HEIGHT: u8 = 192;
 /// Largest number of occupied cells in one object.
-pub const MAX_OBJECT_VOXELS: usize = 8_192;
+pub const MAX_OBJECT_VOXELS: usize = 65_536;
 
 const FINGERPRINT_DOMAIN: &[u8] = b"bevy-hex-game/object-blueprint/v1";
 
@@ -972,10 +972,12 @@ mod tests {
             height: MAX_OBJECT_HEIGHT,
         };
         assert!(bounds.validate().is_ok());
-        assert!(bounds.contains(LocalVoxelCoord::new(12, -12, -32)));
-        assert!(bounds.contains(LocalVoxelCoord::new(0, 0, 31)));
-        assert!(!bounds.contains(LocalVoxelCoord::new(13, -13, 0)));
-        assert!(!bounds.contains(LocalVoxelCoord::new(0, 0, 32)));
+        let radius = i32::from(MAX_OBJECT_RADIUS);
+        let top = -32 + i32::from(MAX_OBJECT_HEIGHT) - 1;
+        assert!(bounds.contains(LocalVoxelCoord::new(radius, -radius, -32)));
+        assert!(bounds.contains(LocalVoxelCoord::new(0, 0, top)));
+        assert!(!bounds.contains(LocalVoxelCoord::new(radius + 1, -radius - 1, 0)));
+        assert!(!bounds.contains(LocalVoxelCoord::new(0, 0, top + 1)));
 
         let mut invalid = plant();
         invalid.bounds.radius = MAX_OBJECT_RADIUS.saturating_add(1);

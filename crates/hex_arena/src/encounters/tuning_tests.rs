@@ -3,7 +3,7 @@
 use super::*;
 
 #[test]
-fn retreating_dragon_turns_into_prospective_mouth_reach_before_admitting_breath() {
+fn aggressive_dragon_turns_into_prospective_mouth_reach_before_admitting_breath() {
     let (mut session, view, geometry, materials, tuning) = fixture(ArenaEncounter::Dragon);
     pose(&mut session, 1, Vec3::ZERO, Vec3::Z);
     pose(&mut session, 0, Vec3::NEG_Z * 5.0, Vec3::Z);

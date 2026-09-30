@@ -10,7 +10,7 @@ pub const MAX_BODY_HEX_PRISMS: usize = 7;
 
 /// Immutable observed component geometry, expressed relative to an actor's feet.
 /// Its private constructor keeps physical queries finite and bounded.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct BodyPrismSnapshot {
     parts: [BodyHexPrism; MAX_BODY_HEX_PRISMS],
     count: u8,
@@ -70,7 +70,7 @@ impl BodyPrismSnapshot {
 }
 
 /// Physical Worm phase; it contains no target, memory, or movement destination.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub enum WormPhase {
     /// Hidden or moving on the admitted shallow soil band.
     Travel,
@@ -83,7 +83,7 @@ pub enum WormPhase {
 }
 
 /// Authority-owned rendering/evidence state; never a human enemy-location marker.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, serde::Deserialize)]
 pub struct WormSnapshot {
     /// Current body phase.
     pub phase: WormPhase,
@@ -95,7 +95,7 @@ pub struct WormSnapshot {
     pub exposed: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct WormBodyState {
     pub(crate) current: BodyPrismSnapshot,
     pub(crate) previous: BodyPrismSnapshot,

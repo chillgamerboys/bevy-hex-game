@@ -33,9 +33,11 @@ pub const MAX_LIVE_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_SNAPSHOT_TRANSFER_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum number of horizontal columns in a world snapshot.
 ///
-/// The largest shipped configuration is Mountain Range at radius 77, or 18,019
-/// columns. Twice that measurement is 36,038 and the next power of two is 65,536.
-pub const MAX_WORLD_COLUMNS: usize = 65_536;
+/// Grand V3's radius-187 footprint contains 105,469 columns; the next power of two
+/// is 131,072. This remains a validation/allocation ceiling rather than serialized
+/// metadata, so increasing it does not change the V1 wire shape or reject older V1
+/// snapshots that were produced under the previous 65,536-column ceiling.
+pub const MAX_WORLD_COLUMNS: usize = 131_072;
 /// Maximum material runs retained in one column.
 ///
 /// This follows the existing accepted absolute level domain rather than permitting a
@@ -359,5 +361,31 @@ mod tests {
         ));
         let decoded = serde_json::from_str::<BoundedVec<u8, 2>>("[1,2,3]");
         assert!(decoded.is_err());
+    }
+
+    #[test]
+    fn world_column_bound_covers_grand_v3_without_changing_v1() {
+        const PREVIOUS_V1_LIMIT: usize = 65_536;
+        const GRAND_V3_COLUMNS: usize = 105_469;
+
+        assert_eq!(crate::WORLD_SNAPSHOT_VERSION_V1, 1);
+        assert_eq!(MAX_WORLD_COLUMNS, 131_072);
+
+        let previous_v1 = BoundedVec::<u8, MAX_WORLD_COLUMNS>::new(vec![0; PREVIOUS_V1_LIMIT])
+            .expect("the complete previous V1 envelope must remain accepted");
+        let encoded = serde_json::to_string(&previous_v1)
+            .expect("the prior V1-compatible sequence should serialize");
+        let decoded: BoundedVec<u8, MAX_WORLD_COLUMNS> = serde_json::from_str(&encoded)
+            .expect("the prior V1-compatible sequence should deserialize");
+        assert_eq!(decoded.len(), PREVIOUS_V1_LIMIT);
+
+        assert!(BoundedVec::<u8, MAX_WORLD_COLUMNS>::new(vec![0; GRAND_V3_COLUMNS]).is_ok());
+        assert_eq!(
+            BoundedVec::<u8, MAX_WORLD_COLUMNS>::new(vec![0; MAX_WORLD_COLUMNS + 1]),
+            Err(BoundError::TooManyItems {
+                maximum: MAX_WORLD_COLUMNS,
+                actual: MAX_WORLD_COLUMNS + 1,
+            })
+        );
     }
 }

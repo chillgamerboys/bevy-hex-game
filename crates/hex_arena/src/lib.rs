@@ -11,6 +11,7 @@ use hex_core::arena::{
     ArenaBurrowMaterials, ArenaBurrowOutcome, ArenaBurrowRequest, ArenaMaterials, ArenaReset,
     ArenaSystems, ArenaTerrainView, ArenaTick, ArenaVoxelGeometry,
 };
+use hex_core::ocean::{OceanEnvironmentView, OceanSimulationTime};
 use hex_core::{
     TerrainBatchId, TerrainEdit, TerrainImpact, TerrainImpactOutcome, TerrainImpactResult, TilePos,
 };
@@ -22,12 +23,40 @@ mod bot;
 mod bot_baseline;
 mod bot_config;
 mod collision;
+#[cfg(any(test, feature = "test-support"))]
+pub use collision::ProbeCacheStats;
 mod controller;
+#[cfg(any(test, feature = "test-support"))]
+mod cpu_diagnostics;
+#[cfg(any(test, feature = "test-support"))]
+pub use cpu_diagnostics::{ArenaCpuPhase, ArenaCpuSnapshot, SteeringCpuCounters};
 mod creatures;
 mod encounter_config;
 mod encounters;
+mod expedition;
+pub use encounters::ExpeditionRallySnapshot;
+pub use expedition::{DragonTier, ExpeditionRole};
+mod exploration;
+mod glider;
+mod grand;
+pub use exploration::FreeFlightSnapshot;
+pub use grand::{GrandCheckpointIdentity, GrandProgressSnapshot, GrandTuning, ShrineId};
 mod hex_prisms;
+pub use glider::GliderSnapshot;
+mod marine;
 mod motion;
+pub use marine::{BoatSnapshot, SwimSnapshot};
+mod player_observation;
+pub use player_observation::{
+    CombatFeedbackSnapshot, DiscoveredLandmark, EnemyHealthCueSnapshot, HitConfirmationSnapshot,
+    LandmarkKind, PlayerObservation, SpellAvailability, SpellAvailabilityState,
+    TargetHealthSnapshot,
+};
+mod progression;
+pub use progression::{
+    ExpeditionReward, ExpeditionSnapshot, FireballMode, FountainSnapshot, MilestoneSnapshot,
+    PlayerSpellProfile, ProgressSnapshot, UpgradePreview, UpgradeStat, UpgradeValue,
+};
 mod shapes;
 mod spells;
 mod targeting;
@@ -40,15 +69,21 @@ pub use battle::{
     ArenaBattleSetup, ArenaControl, BattlePreset, BattleResult, BattleSetupError, BattleSummary,
     BattleTeamSummary, TeamRoster, MAX_BATTLE_ACTORS,
 };
-pub use bot::BotDebugSnapshot;
+pub use bot::{BotDebugSnapshot, EscapeTuning};
 pub use bot_config::BotTuning;
+#[cfg(any(test, feature = "test-support"))]
+pub use controller::{ground_motion_contract, GroundMotionContract};
 pub use creatures::{
     ActorId, AttackPhase, AttackSnapshot, AuraSnapshot, BarrierSnapshot, BeamSnapshot,
     BodyHexPrism, CreatureAbility, EncounterSummary, PartyId, PartyPhase, PartySnapshot,
     ProjectileAppearance, Species, TeamId, CREATURE_ABILITY_COUNT,
 };
 pub use encounter_config::EncounterTuning;
-pub use encounters::{CreatureDecisionSnapshot, EncounterActorStats, PartyKnowledgeSnapshot};
+#[cfg(any(test, feature = "test-support"))]
+pub use encounters::DryRouteProbeFailure;
+pub use encounters::{
+    ActorSeparationStats, CreatureDecisionSnapshot, EncounterActorStats, PartyKnowledgeSnapshot,
+};
 pub use telemetry::{ActorCombatStats, RoundSummary};
 use telemetry::{CombatCue, CombatCueKind};
 
@@ -74,8 +109,8 @@ pub enum Spell {
     /// A ballistic projectile with an explosive impact.
     #[default]
     Fireball,
-    /// A caster-centered burst that excludes its caster.
-    AreaBlast,
+    /// An independent upward boost, activated through the High Jump input edge.
+    HighJump,
 }
 
 impl Spell {
@@ -85,7 +120,7 @@ impl Spell {
         match self {
             Self::Shield => 0,
             Self::Fireball => 1,
-            Self::AreaBlast => 2,
+            Self::HighJump => 2,
         }
     }
 
@@ -95,13 +130,13 @@ impl Spell {
         match self {
             Self::Shield => "Shield",
             Self::Fireball => "Fireball",
-            Self::AreaBlast => "Area Blast",
+            Self::HighJump => "High Jump",
         }
     }
 }
 
 /// A complete input sample. Bot and human commands share this exact path.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct ActorIntent {
     /// Horizontal axes: x is right and y is forward relative to aim yaw.
     pub movement: Vec2,
@@ -111,6 +146,24 @@ pub struct ActorIntent {
     pub run: bool,
     /// Single jump edge, consumed by the next fixed tick.
     pub jump: bool,
+    /// Independent High Jump press edge; never changes the selected projectile.
+    pub high_jump: bool,
+    /// One X edge requests the unlocked Grand short teleport.
+    pub teleport: bool,
+    /// One R edge activates a nearby Grand shrine.
+    pub interact: bool,
+    /// Single G press edge to open or fold the expedition glider.
+    pub glider_toggle: bool,
+    /// Raw camera look direction for flight steering, before aim correction.
+    pub glider_look: Vec3,
+    /// Single F press edge toggling collision-aware exploration flight.
+    pub flight_toggle: bool,
+    /// Single B press edge deploying or folding the exploration sailboat.
+    pub boat_toggle: bool,
+    /// Free-flight rise/drop axis: Space is +1 and Ctrl is -1.
+    pub flight_vertical: f32,
+    /// Hold Shift for 160 units/s instead of the normal 80 units/s flight.
+    pub flight_fast: bool,
     /// Press edge, retained until the next fixed tick even for a quick tap.
     pub cast_pressed: bool,
     /// Release edge. Only an armed press can release a spell.
@@ -128,6 +181,15 @@ impl Default for ActorIntent {
             aim: Vec3::NEG_Z,
             run: false,
             jump: false,
+            high_jump: false,
+            teleport: false,
+            interact: false,
+            glider_toggle: false,
+            glider_look: Vec3::NEG_Z,
+            flight_toggle: false,
+            boat_toggle: false,
+            flight_vertical: 0.0,
+            flight_fast: false,
             cast_pressed: false,
             cast_released: false,
             cast_held: false,
@@ -144,7 +206,7 @@ pub struct ArenaInput {
 }
 
 /// Read-only projection of an actor's currently armed spell.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChargeState {
     /// Spell captured on the accepted press.
     pub spell: Spell,
@@ -164,8 +226,8 @@ pub struct ArenaTuning {
     pub shield_size: usize,
     /// Fireball sphere preset (0, 1, or 2).
     pub fireball_size: usize,
-    /// Area Blast sphere preset (0, 1, or 2).
-    pub blast_size: usize,
+    /// Minimum free-space height of an admitted High Jump boost.
+    pub high_jump_height: f32,
     /// Reference seed/fireball speed before the charge range multiplier.
     pub projectile_speed: f32,
     /// Seconds held to reach maximum projectile charge.
@@ -182,18 +244,19 @@ pub struct ArenaTuning {
     pub shield_cooldown: f32,
     /// Fireball cooldown, charged immediately on release.
     pub fireball_cooldown: f32,
-    /// Area Blast cooldown, charged immediately on release.
-    pub blast_cooldown: f32,
+    /// Independent High Jump cooldown, spent on an admitted press.
+    pub high_jump_cooldown: f32,
     /// Maximum fireball HP damage before radial falloff.
     pub fireball_damage: f32,
-    /// Maximum Area Blast HP damage before radial falloff.
-    pub blast_damage: f32,
+
     /// Maximum fireball impulse speed before radial falloff.
     pub fireball_knockback: f32,
-    /// Maximum Area Blast impulse speed before radial falloff.
-    pub blast_knockback: f32,
+
     /// World-owned voxel HP damage per admitted blast.
     pub terrain_power: u8,
+    /// Runtime-only expedition values; authoring presets remain independent.
+    #[serde(skip)]
+    pub player_profile: Option<PlayerSpellProfile>,
 }
 
 impl Default for ArenaTuning {
@@ -203,7 +266,7 @@ impl Default for ArenaTuning {
             bot: BotTuning::default(),
             shield_size: 1,
             fireball_size: 1,
-            blast_size: 1,
+            high_jump_height: 4.0,
             projectile_speed: 32.0,
             charge_seconds: 0.75,
             tap_range_multiplier: 1.0 / 3.0,
@@ -212,12 +275,13 @@ impl Default for ArenaTuning {
             projectile_gravity: 12.0,
             shield_cooldown: 5.0,
             fireball_cooldown: 1.25,
-            blast_cooldown: 7.0,
+            high_jump_cooldown: 7.0,
             fireball_damage: 35.0,
-            blast_damage: 45.0,
+
             fireball_knockback: 8.0,
-            blast_knockback: 11.0,
+
             terrain_power: 2,
+            player_profile: None,
         }
     }
 }
@@ -227,7 +291,13 @@ impl ArenaTuning {
     pub fn validate(&self) -> Result<(), String> {
         self.bot.validate()?;
         self.encounters.validate()?;
-        if [self.shield_size, self.fireball_size, self.blast_size]
+        if !self.high_jump_height.is_finite() || !(2.0..=8.0).contains(&self.high_jump_height) {
+            return Err("high_jump_height must be finite and in 2..=8.".into());
+        }
+        if self.high_jump_cooldown < 0.5 {
+            return Err("high_jump_cooldown must be at least 0.5 seconds.".into());
+        }
+        if [self.shield_size, self.fireball_size]
             .into_iter()
             .any(|i| i > 2)
         {
@@ -241,22 +311,30 @@ impl ArenaTuning {
             ("projectile_gravity", self.projectile_gravity, 100.0),
             ("shield_cooldown", self.shield_cooldown, 60.0),
             ("fireball_cooldown", self.fireball_cooldown, 60.0),
-            ("blast_cooldown", self.blast_cooldown, 60.0),
+            ("high_jump_cooldown", self.high_jump_cooldown, 20.0),
             ("fireball_damage", self.fireball_damage, 100.0),
-            ("blast_damage", self.blast_damage, 100.0),
         ] {
             if !value.is_finite() || value <= 0.0 || value > max {
                 return Err(format!("{name} must be finite and in (0, {max}]."));
             }
         }
+        if let Some(profile) = self.player_profile {
+            if !profile.shield_projectile_speed.is_finite()
+                || !(45.0..=110.0).contains(&profile.shield_projectile_speed)
+                || !profile.walking_speed.is_finite()
+                || !(5.90625..=9.0).contains(&profile.walking_speed)
+                || !profile.fireball_radius.is_finite()
+                || !(2.5..=3.25).contains(&profile.fireball_radius)
+                || !(5..=9).contains(&profile.shield_dimensions.0)
+                || !(5..=9).contains(&profile.shield_dimensions.1)
+            {
+                return Err("Invalid effective expedition player profile.".into());
+            }
+        }
         if self.tap_range_multiplier > self.max_range_multiplier {
             return Err("Tap range must not exceed full-charge range.".into());
         }
-        for value in [
-            self.fireball_knockback,
-            self.blast_knockback,
-            self.shield_push,
-        ] {
+        for value in [self.fireball_knockback, self.shield_push] {
             if !value.is_finite() || !(0.0..=40.0).contains(&value) {
                 return Err("Knockback must be finite and in 0..=40.".into());
             }
@@ -280,6 +358,21 @@ impl ArenaTuning {
         self.projectile_speed * range.sqrt()
     }
 
+    /// Spell-specific reference velocity; legacy presets share one value.
+    #[must_use]
+    pub fn spell_projectile_speed(&self, spell: Spell) -> f32 {
+        match (spell, self.player_profile) {
+            (Spell::Shield, Some(profile)) => profile.shield_projectile_speed,
+            _ => self.projectile_speed,
+        }
+    }
+
+    /// Shared prediction/release charging rule with independent spell velocities.
+    #[must_use]
+    pub fn spell_launch_speed(&self, spell: Spell, elapsed: f32) -> f32 {
+        self.launch_speed(elapsed) * self.spell_projectile_speed(spell) / self.projectile_speed
+    }
+
     /// Charge duration closest to the original reference speed, useful for comparisons.
     #[must_use]
     pub fn reference_charge_seconds(&self) -> f32 {
@@ -294,6 +387,9 @@ impl ArenaTuning {
     /// Wall width in hex columns and height in voxel levels, thickness one column.
     #[must_use]
     pub fn shield_dimensions(&self) -> (i32, i32) {
+        if let Some(profile) = self.player_profile {
+            return profile.shield_dimensions;
+        }
         match self.shield_size {
             0 => (3, 4),
             2 => (7, 6),
@@ -304,6 +400,9 @@ impl ArenaTuning {
     /// Fireball radius in world units.
     #[must_use]
     pub fn fireball_radius(&self) -> f32 {
+        if let Some(profile) = self.player_profile {
+            return profile.fireball_radius;
+        }
         match self.fireball_size {
             0 => 1.5,
             2 => 3.5,
@@ -311,30 +410,20 @@ impl ArenaTuning {
         }
     }
 
-    /// Area Blast radius in world units.
-    #[must_use]
-    pub fn blast_radius(&self) -> f32 {
-        match self.blast_size {
-            0 => 2.5,
-            2 => 5.5,
-            _ => 4.0,
-        }
-    }
-
     fn cooldown(&self, spell: Spell) -> f32 {
         match spell {
             Spell::Shield => self.shield_cooldown,
             Spell::Fireball => self.fireball_cooldown,
-            Spell::AreaBlast => self.blast_cooldown,
+            Spell::HighJump => self.high_jump_cooldown,
         }
     }
 }
 
 /// One authoritative continuous actor. Presentation reads these fields only.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Actor {
     /// Stable actor identity allocated once per run, never reused after death.
-    pub id: u8,
+    pub id: crate::ActorId,
     /// Physical/behavior profile; human and shadow preserve accepted Duel values.
     pub species: Species,
     /// Friendly bodies are skipped by projectiles except the caster itself.
@@ -353,7 +442,7 @@ pub struct Actor {
     pub hp: f32,
     /// Selected spell for the next release.
     pub selected: Spell,
-    /// Remaining seconds in Shield/Fireball/Area Blast order.
+    /// Remaining seconds in Shield/Fireball/High Jump order.
     pub cooldowns: [f32; 3],
     /// Latest accepted support contact.
     pub grounded: bool,
@@ -363,8 +452,20 @@ pub struct Actor {
     worm: Option<crate::worm_body::WormBodyState>,
     charge: Option<ChargeState>,
     cast_needs_release: bool,
+    buffered_fireball: bool,
     body: Body,
+    glider: glider::GliderState,
+    free_flight: Option<exploration::FreeFlightState>,
+    marine: Option<marine::MarineState>,
+    walking_speed: f32,
+    jump_scale: f32,
+    glider_scale: f32,
+    swim_scale: f32,
+    boat_scale: f32,
     dimensions: Vec3,
+    expedition_role: Option<ExpeditionRole>,
+    dragon_tier: DragonTier,
+    expedition_player: bool,
     body_yaw: f32,
     previous_yaw: f32,
     attack: Option<AttackSnapshot>,
@@ -375,7 +476,12 @@ pub struct Actor {
 }
 
 impl Actor {
-    fn spawn(id: u8, feet: Vec3, aim: Vec3) -> Self {
+    fn configure_expedition_player(&mut self) {
+        self.expedition_player = true;
+        self.dimensions.y = 1.2;
+    }
+
+    fn spawn(id: crate::ActorId, feet: Vec3, aim: Vec3) -> Self {
         Self {
             id,
             species: if id == 0 {
@@ -398,8 +504,20 @@ impl Actor {
             worm: None,
             charge: None,
             cast_needs_release: false,
+            buffered_fireball: false,
             body: Body::default(),
+            glider: glider::GliderState::default(),
+            free_flight: None,
+            marine: None,
+            walking_speed: 5.90625,
+            jump_scale: 1.0,
+            glider_scale: 1.0,
+            swim_scale: 1.0,
+            boat_scale: 1.0,
             dimensions: Vec3::new(BODY_RADIUS * 2.0, BODY_HEIGHT, BODY_RADIUS * 2.0),
+            expedition_role: None,
+            dragon_tier: DragonTier::Standard,
+            expedition_player: false,
             body_yaw: (-aim.x).atan2(-aim.z),
             previous_yaw: (-aim.x).atan2(-aim.z),
             attack: None,
@@ -407,6 +525,34 @@ impl Actor {
             damage_multiplier: 1.0,
             last_damage_tick: None,
             last_activity_tick: 0,
+        }
+    }
+
+    /// Current expedition glider facts; legacy actors have no player glider.
+    #[must_use]
+    pub fn glider(&self) -> Option<GliderSnapshot> {
+        (self.expedition_player && self.species == Species::Human).then(|| {
+            if self.hp <= 0.0 {
+                glider::GliderState::default().snapshot()
+            } else {
+                self.glider.snapshot()
+            }
+        })
+    }
+
+    pub(crate) fn clear_glider(&mut self) {
+        self.glider = glider::GliderState::default();
+        self.body.airborne_momentum = None;
+        if self.hp <= 0.0 {
+            if let Some(marine) = &mut self.marine {
+                marine.stop_on_death();
+                self.body.vertical_velocity = 0.0;
+                self.body.impulse_velocity = Vec3::ZERO;
+                self.body.control_velocity = Vec3::ZERO;
+            }
+            if let Some(flight) = &mut self.free_flight {
+                *flight = exploration::FreeFlightState::default();
+            }
         }
     }
 
@@ -431,6 +577,8 @@ impl Actor {
             self.center() + self.body_rotation() * Vec3::NEG_Z * (self.dimensions.z * 0.5 - 0.05)
         } else if self.species == Species::Goblin {
             self.feet + Vec3::Y * (self.dimensions.y * 0.775)
+        } else if self.species == Species::Human && self.expedition_player {
+            self.feet + Vec3::Y * 1.02
         } else {
             self.feet + Vec3::Y * EYE_HEIGHT
         }
@@ -480,17 +628,30 @@ impl Actor {
         self.charge
     }
 
+    /// Cast state that must be reconciled with the physical mouse button after resume.
+    #[must_use]
+    pub fn resume_cast_spell(&self) -> Option<Spell> {
+        self.charge
+            .map(|c| c.spell)
+            .or(self.buffered_fireball.then_some(Spell::Fireball))
+    }
+
     fn cancel_charge(&mut self) {
-        self.cast_needs_release |= self.charge.is_some();
+        self.cast_needs_release |= self.charge.is_some() || self.buffered_fireball;
+        self.buffered_fireball = false;
         self.charge = None;
     }
 
     fn casting(&mut self, intent: ActorIntent, tuning: &ArenaTuning) -> Option<(Spell, f32)> {
+        if self.selected == Spell::HighJump {
+            return None;
+        }
         // A cancelled or refused hold cannot re-arm itself. A neutral sample or
         // release restores eligibility for the next genuine press.
         if !intent.cast_held && !intent.cast_pressed && !intent.cast_released {
             self.charge = None;
             self.cast_needs_release = false;
+            self.buffered_fireball = false;
             return None;
         }
         if intent.cast_pressed && !self.cast_needs_release && self.charge.is_none() {
@@ -504,15 +665,36 @@ impl Actor {
                     spell: self.selected,
                     elapsed: 0.0,
                 });
+            } else if self.species == Species::Human && self.selected == Spell::Fireball {
+                self.buffered_fireball = true;
+            }
+        }
+        if self.buffered_fireball && intent.cast_held && !intent.cast_released {
+            if self.selected != Spell::Fireball || self.hp <= 0.0 {
+                self.buffered_fireball = false;
+            } else if self
+                .cooldowns
+                .get(Spell::Fireball.index())
+                .is_some_and(|v| *v <= STEP * 0.01)
+            {
+                self.buffered_fireball = false;
+                self.charge = Some(ChargeState {
+                    spell: Spell::Fireball,
+                    elapsed: 0.0,
+                });
             }
         }
         if intent.cast_released {
+            self.buffered_fireball = false;
             self.cast_needs_release = false;
             let charge = self.charge.take()?;
             if self.hp > 0.0 && charge.spell == self.selected {
                 let cooldown = self.cooldowns.get(charge.spell.index())?;
                 if *cooldown <= STEP * 0.01 {
-                    return Some((charge.spell, tuning.launch_speed(charge.elapsed)));
+                    return Some((
+                        charge.spell,
+                        tuning.spell_launch_speed(charge.spell, charge.elapsed),
+                    ));
                 }
             }
         } else if intent.cast_held {
@@ -523,6 +705,24 @@ impl Actor {
             self.cancel_charge();
         }
         None
+    }
+
+    fn high_jump(&mut self, tuning: &ArenaTuning) -> bool {
+        if self.hp <= 0.0
+            || !matches!(self.species, Species::Human | Species::Shadow)
+            || self
+                .cooldowns
+                .get(Spell::HighJump.index())
+                .is_none_or(|cd| *cd > STEP * 0.01)
+        {
+            return false;
+        }
+        if let Some(cd) = self.cooldowns.get_mut(Spell::HighJump.index()) {
+            *cd = tuning.high_jump_cooldown;
+        }
+        self.body.boost(tuning.high_jump_height);
+        self.grounded = false;
+        true
     }
 
     /// Current independent knockback momentum, for exact-state review hooks.
@@ -540,12 +740,12 @@ impl Actor {
 }
 
 /// A released projectile. Its launch parameters are frozen through impact.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Projectile {
     /// Stable identifier within the current reset generation.
     pub id: u64,
     /// Casting actor identity.
-    pub owner: u8,
+    pub owner: crate::ActorId,
     /// Current physical center.
     pub position: Vec3,
     /// Physical center before the latest swept tick.
@@ -560,8 +760,33 @@ pub struct Projectile {
     owner_cleared: bool,
 }
 
+/// Presentation identity, independent of the three gameplay ability slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub enum VisualEffectKind {
+    /// Stone cover emergence.
+    Shield,
+    /// Fireball impact sphere.
+    Fireball,
+    /// Tiny contact spark with no expanding blast volume.
+    FireballContact,
+    /// Creature radial attacks such as the Golem slam.
+    RadialBurst,
+    /// Small non-damaging boost takeoff effect.
+    HighJump,
+}
+
+impl From<Spell> for VisualEffectKind {
+    fn from(spell: Spell) -> Self {
+        match spell {
+            Spell::Shield => Self::Shield,
+            Spell::Fireball => Self::Fireball,
+            Spell::HighJump => Self::HighJump,
+        }
+    }
+}
+
 /// Short-lived cosmetic event; neither rendering nor expiry mutates terrain or HP.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VisualEffect {
     /// World-space effect center.
     pub center: Vec3,
@@ -572,20 +797,20 @@ pub struct VisualEffect {
     /// Total cosmetic lifetime in seconds.
     pub lifetime: f32,
     /// Spell that caused this event.
-    pub kind: Spell,
+    pub kind: VisualEffectKind,
 }
 
 /// Terminal result. The entire session waits for a full reset after KO.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ArenaOutcome {
     /// Winning actor ID; zero also denotes all hostile encounter parties defeated.
-    Winner(u8),
+    Winner(crate::ActorId),
     /// No side survived the terminal simulation tick.
     Draw,
 }
 
 /// Readable immutable simulation projection plus privately owned control state.
-#[derive(Resource, Debug)]
+#[derive(Resource, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ArenaSession {
     /// Stable continuous actors for the selected duel or encounter roster.
     pub actors: Vec<Actor>,
@@ -605,14 +830,26 @@ pub struct ArenaSession {
     pub terrain_outcomes: u64,
     /// Number of shield impacts that added at least one safe cell since reset.
     pub shields_raised: u64,
+    progression: Option<progression::ProgressState>,
+    grand: Option<grand::GrandState>,
+    configured_grand_tuning: GrandTuning,
+    exploration: bool,
+    #[serde(skip)]
+    ocean_environment: Option<OceanEnvironmentView>,
+    player_knowledge: player_observation::PlayerKnowledge,
+    #[serde(skip)]
     collision: CollisionWorld,
     generation: Option<u64>,
     bot: Bot,
     next_projectile: u64,
     next_impact: u64,
+    #[serde(skip)]
     pending_impacts: BTreeMap<TerrainBatchId, TerrainImpact>,
+    #[serde(skip)]
     burrow_policy: ArenaBurrowMaterials,
+    #[serde(skip)]
     burrow_query: worm_geometry::BurrowQuery,
+    #[serde(skip)]
     pending_burrows: BTreeMap<ActorId, ArenaBurrowRequest>,
     next_burrow: BTreeMap<ActorId, u64>,
     pending_walls: Vec<PendingWall>,
@@ -621,11 +858,18 @@ pub struct ArenaSession {
     next_cue: u64,
     combat_stats: [ActorCombatStats; 2],
     encounter: encounters::EncounterState,
+    #[serde(skip)]
     accepted_battle: ArenaBattleSetup,
+    #[serde(skip)]
     battle_result: Option<BattleResult>,
+    #[serde(skip)]
     battle_initial: Vec<BattleTeamSummary>,
     #[cfg(any(test, feature = "test-support"))]
+    #[serde(skip)]
     baseline_bot: Option<bot_baseline::Bot>,
+    #[cfg(any(test, feature = "test-support"))]
+    #[serde(skip)]
+    cpu: cpu_diagnostics::CpuDiagnostics,
 }
 
 impl Default for ArenaSession {
@@ -640,6 +884,12 @@ impl Default for ArenaSession {
             notice: String::new(),
             terrain_outcomes: 0,
             shields_raised: 0,
+            progression: None,
+            grand: None,
+            configured_grand_tuning: GrandTuning::default(),
+            exploration: false,
+            ocean_environment: None,
+            player_knowledge: player_observation::PlayerKnowledge::default(),
             collision: CollisionWorld::default(),
             generation: None,
             bot: Bot::default(),
@@ -661,13 +911,30 @@ impl Default for ArenaSession {
             battle_initial: Vec::new(),
             #[cfg(any(test, feature = "test-support"))]
             baseline_bot: None,
+            #[cfg(any(test, feature = "test-support"))]
+            cpu: cpu_diagnostics::CpuDiagnostics::default(),
         }
     }
 }
 
 impl ArenaSession {
+    fn record_high_jump(&mut self, id: crate::ActorId, origin: Vec3) {
+        self.record_cast(id, Spell::HighJump);
+        self.combat_cue(id, origin, CombatCueKind::Release);
+        self.effects.push(VisualEffect {
+            center: origin + Vec3::Y * 0.1,
+            radius: 0.45,
+            age: 0.0,
+            lifetime: 0.25,
+            kind: VisualEffectKind::HighJump,
+        });
+    }
+
     /// Advance shared simulation housekeeping after mode initialization succeeds.
     fn begin_simulation_tick(&mut self) {
+        if self.is_grand_run() {
+            self.advance_visual_effects();
+        }
         self.tick += 1;
         self.combat_cues
             .retain(|cue| self.tick.saturating_sub(cue.tick) <= 120);
@@ -682,6 +949,13 @@ impl ArenaSession {
         }
     }
 
+    fn advance_visual_effects(&mut self) {
+        for effect in &mut self.effects {
+            effect.age += STEP;
+        }
+        self.effects.retain(|effect| effect.age < effect.lifetime);
+    }
+
     fn shield_no_room_notice(&mut self) {
         self.notice = "No room for new shield blocks".into();
         self.shield_notice_until = Some(self.tick.saturating_add(240));
@@ -692,8 +966,11 @@ impl ArenaSession {
     pub fn cancel_charges(&mut self) {
         for actor in &mut self.actors {
             actor.cancel_charge();
+            if actor.hp <= 0.0 {
+                actor.clear_glider();
+            }
         }
-        self.bot.cancel_charge();
+        self.bot.cancel_all();
         self.encounter.cancel_charges();
         #[cfg(any(test, feature = "test-support"))]
         if let Some(bot) = &mut self.baseline_bot {
@@ -728,7 +1005,7 @@ impl ArenaSession {
     #[must_use]
     pub fn aim_from_camera(
         &self,
-        actor_id: u8,
+        actor_id: crate::ActorId,
         camera_origin: Vec3,
         camera_direction: Vec3,
     ) -> Vec3 {
@@ -737,19 +1014,52 @@ impl ArenaSession {
 
     fn reset(&mut self, generation: u64, world: &ArenaTerrainView, geometry: ArenaVoxelGeometry) {
         let [human, bot] = world.spawns;
-        let aim = (bot - human).normalize_or_zero();
+        let look_at = world.anchors.get("player_look_at").copied().unwrap_or(bot);
+        let aim = (look_at - human).normalize_or_zero();
         let bot_enabled = self.bot_enabled;
+        let configured_grand_tuning = self.configured_grand_tuning.clone();
         #[cfg(any(test, feature = "test-support"))]
         let baseline = self.baseline_bot.is_some();
+        #[cfg(any(test, feature = "test-support"))]
+        let cpu_profiling = self.cpu.enabled;
         *self = Self {
             actors: vec![Actor::spawn(0, human, aim), Actor::spawn(1, bot, -aim)],
             generation: Some(generation),
+            exploration: world.selection.map.capabilities().exploration,
+            progression: matches!(
+                world.selection.map,
+                hex_core::arena::ArenaMap::ForestMassif | hex_core::arena::ArenaMap::GrandV4
+            )
+            .then(progression::ProgressState::default),
+            grand: (world.selection.map == hex_core::arena::ArenaMap::GrandV4).then(|| {
+                let mut state = grand::GrandState::new(human);
+                state.tuning = configured_grand_tuning.clone();
+                state
+            }),
+            configured_grand_tuning,
             bot_enabled,
             bot: Bot::default(),
             #[cfg(any(test, feature = "test-support"))]
             baseline_bot: baseline.then(bot_baseline::Bot::default),
+            #[cfg(any(test, feature = "test-support"))]
+            cpu: cpu_diagnostics::CpuDiagnostics::enabled(cpu_profiling),
             ..Default::default()
         };
+        if self.exploration {
+            self.actors.truncate(1);
+            if let Some(actor) = self.actors.first_mut() {
+                actor.configure_expedition_player();
+                actor.free_flight = Some(exploration::FreeFlightState::default());
+                actor.marine = Some(marine::MarineState::default());
+                if let Some(marine) = &mut actor.marine {
+                    marine.lab = matches!(
+                        world.selection.map,
+                        hex_core::arena::ArenaMap::WaterLab
+                            | hex_core::arena::ArenaMap::NorthernArchipelago
+                    );
+                }
+            }
+        }
         self.collision.refresh(world, geometry);
     }
 
@@ -763,6 +1073,7 @@ impl ArenaSession {
         self.reset(generation, world, geometry);
         self.accepted_battle = setup.clone();
         if setup.control == ArenaControl::Spectator {
+            self.progression = None;
             self.actors.clear();
         }
         if let Err(reason) = setup.validate_for(world.selection.map) {
@@ -795,12 +1106,18 @@ impl ArenaSession {
         materials: ArenaMaterials,
         tuning: &ArenaTuning,
     ) -> CommandsOut {
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.begin(world.revision);
         self.collision.refresh(world, geometry);
+        #[cfg(any(test, feature = "test-support"))]
+        self.cpu.mark(ArenaCpuPhase::CollisionRefresh);
         let mut commands = CommandsOut::default();
-        for effect in &mut self.effects {
-            effect.age += STEP;
+        if !self.is_grand_run() {
+            self.advance_visual_effects();
         }
-        self.effects.retain(|effect| effect.age < effect.lifetime);
+        for actor in self.actors.iter_mut().filter(|actor| actor.hp <= 0.0) {
+            actor.clear_glider();
+        }
         if self.is_finished() {
             return commands;
         }
@@ -845,6 +1162,7 @@ impl ArenaSession {
             bot
         };
         let mut casts = Vec::new();
+        let mut boosts = Vec::new();
         for actor in &mut self.actors {
             actor.previous_feet = actor.feet;
             if actor.hp <= 0.0 {
@@ -854,14 +1172,18 @@ impl ArenaSession {
             if intent.aim.is_finite() && intent.aim.length_squared() > 0.0001 {
                 actor.aim = intent.aim.normalize();
             }
-            if let Some(spell) = intent.selected {
-                if spell != actor.selected && actor.charge.is_some() {
+            if let Some(spell) = intent.selected.filter(|spell| *spell != Spell::HighJump) {
+                if spell != actor.selected && (actor.charge.is_some() || actor.buffered_fireball) {
                     actor.cancel_charge();
                 }
                 actor.selected = spell;
             }
             for cooldown in &mut actor.cooldowns {
                 *cooldown = (*cooldown - STEP).max(0.0);
+            }
+            let boosted = intent.high_jump && actor.high_jump(tuning);
+            if boosted {
+                boosts.push((actor.id, actor.feet));
             }
             let planar = Vec3::new(actor.aim.x, 0.0, actor.aim.z).normalize_or_zero();
             let forward = if planar.length_squared() > 0.5 {
@@ -879,7 +1201,7 @@ impl ArenaSession {
                 &mut actor.feet,
                 forward * movement.y + right * movement.x,
                 intent.run,
-                intent.jump,
+                intent.jump && !boosted,
                 &self.collision,
             );
             actor.grounded = actor.body.grounded;
@@ -900,6 +1222,9 @@ impl ArenaSession {
                     casts.push((actor.id, spell, speed));
                 }
             }
+        }
+        for (id, origin) in boosts {
+            self.record_high_jump(id, origin);
         }
         separate_actors(&mut self.actors, &self.collision);
         // Existing shots share this tick's previous-to-current actor interval.
@@ -960,6 +1285,9 @@ struct CommandsOut {
     edits: Vec<TerrainEdit>,
     impacts: Vec<TerrainImpact>,
     burrows: Vec<ArenaBurrowRequest>,
+    // Only the Grand pre-tick terrain gate may defer travel edges. Refused
+    // actions, terminal sessions and invalid setup must still consume them.
+    defer_travel_input: bool,
 }
 
 fn separate_actors(actors: &mut [Actor], world: &CollisionWorld) {
@@ -992,7 +1320,7 @@ pub struct Preview {
     pub points: Vec<Vec3>,
     /// Currently available shield cells after terrain, bounds, and body clipping.
     pub wall_voxels: Vec<TilePos>,
-    /// Earliest physical contact or Area Blast center.
+    /// Earliest physical projectile contact.
     pub impact: Option<Vec3>,
     /// Whether the predicted impact can produce the selected effect.
     pub valid: bool,
@@ -1012,6 +1340,7 @@ pub fn preview(
 /// Install the headless simulation in the caller-owned fixed arena schedule.
 pub fn plugin(app: &mut App) {
     app.init_resource::<ArenaSession>()
+        .init_resource::<OceanSimulationTime>()
         .init_resource::<ArenaInput>()
         .init_resource::<ArenaTuning>()
         .init_resource::<ArenaBattleSetup>()
@@ -1034,6 +1363,11 @@ fn simulate(
     reset: Res<ArenaReset>,
     setup: Res<ArenaBattleSetup>,
     burrow_policy: Res<ArenaBurrowMaterials>,
+    environment: (
+        Option<Res<OceanEnvironmentView>>,
+        Option<Res<hex_core::water_lab::WaterLabSettings>>,
+    ),
+    mut ocean_time: ResMut<OceanSimulationTime>,
     mut burrow_outcomes: MessageReader<ArenaBurrowOutcome>,
     mut burrows: MessageWriter<ArenaBurrowRequest>,
     mut outcomes: MessageReader<TerrainImpactOutcome>,
@@ -1050,8 +1384,37 @@ fn simulate(
         input.human.cast_released = false;
         input.human.cast_held = false;
         input.human.jump = false;
+        input.human.high_jump = false;
+        input.human.teleport = false;
+        input.human.interact = false;
+        input.human.glider_toggle = false;
+        input.human.glider_look = input.human.aim;
+        input.human.flight_toggle = false;
+        input.human.boat_toggle = false;
+        input.human.flight_vertical = 0.0;
+        input.human.flight_fast = false;
+    }
+    let (ocean, lab_settings) = environment;
+    for actor in &mut session.actors {
+        if let Some(marine) = &mut actor.marine {
+            if marine.lab {
+                marine.glider_wind_scale = lab_settings
+                    .as_ref()
+                    .map_or(0.65, |settings| settings.glider_wind_scale);
+            }
+        }
     }
     session.install_burrow_policy(&burrow_policy);
+    session.ocean_environment = ocean
+        .as_deref()
+        .filter(|environment| {
+            (session.is_exploration() || session.is_grand_run())
+                && (view.package_identity.as_ref().is_some_and(|package| {
+                    package.manifest_fingerprint == environment.package_fingerprint
+                }) || (view.selection.map == hex_core::arena::ArenaMap::WaterLab
+                    && environment.package_fingerprint == hex_core::water_lab::WATER_LAB_ID))
+        })
+        .cloned();
     for outcome in burrow_outcomes.read() {
         session.accept_burrow_outcome(outcome);
     }
@@ -1062,12 +1425,31 @@ fn simulate(
     input.human.cast_pressed = false;
     input.human.cast_released = false;
     input.human.jump = false;
+    input.human.high_jump = false;
+    input.human.teleport = false;
+    input.human.interact = false;
+    input.human.glider_toggle = false;
+    input.human.flight_toggle = false;
+    input.human.boat_toggle = false;
     input.human.selected = None;
     if let Err(reason) = tuning.validate() {
         session.notice = reason;
         return;
     }
     let emitted = session.advance(human, &view, *geometry, *materials, &tuning);
+    if emitted.defer_travel_input {
+        // These booleans already latch between rendered frames without a fixed
+        // step. Keep that same contract when a Grand step only loads terrain.
+        // The shared input is the entire latch: pause/reset can discard it.
+        input.human.jump = human.jump;
+        input.human.high_jump = human.high_jump;
+        input.human.glider_toggle = human.glider_toggle;
+        input.human.flight_toggle = human.flight_toggle;
+        input.human.boat_toggle = human.boat_toggle;
+        // X/R are contextual one-shots, not deferred travel. Cast gestures keep
+        // their existing application-owned queue and completed-tick contract.
+    }
+    *ocean_time = session.ocean_time();
     for request in emitted.burrows {
         burrows.write(request);
     }
@@ -1082,6 +1464,8 @@ fn simulate(
 #[cfg(test)]
 mod charge_tests;
 #[cfg(test)]
+mod high_jump_tests;
+#[cfg(test)]
 mod knowledge_tests;
 #[cfg(test)]
 mod shield_tests;
@@ -1093,3 +1477,10 @@ mod shape_contract_tests;
 
 #[cfg(test)]
 mod worm_foundation_tests;
+
+impl Actor {
+    fn shift_clock(&mut self, delta: u64) {
+        self.last_damage_tick = self.last_damage_tick.map(|t| t.saturating_add(delta));
+        self.last_activity_tick = self.last_activity_tick.saturating_add(delta);
+    }
+}

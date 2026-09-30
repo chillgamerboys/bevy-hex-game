@@ -1,0 +1,1 @@
+Source audits are recorded in the task. V4 is a separate composition root; adapter must not install tactical lifecycle. Arena max level 128 must become map-specific. Current dry query scans liquids; index for the large river. Static object occupancy must compact exact voxel runs.

@@ -183,7 +183,7 @@ fn native_command_has_one_mode_argument_and_preserves_assets_and_runtime_environ
         assert_eq!(changes.get(OsStr::new(key)), Some(&None));
     }
     for (key, expected) in [
-        ("HEX_ARENA_MAP", "fort"),
+        ("HEX_ARENA_MAP", "forest-massif"),
         ("HEX_ARENA_ENCOUNTER", "dragon"),
         ("HEX_ARENA_CONTROL", "player"),
     ] {

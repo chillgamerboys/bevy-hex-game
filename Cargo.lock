@@ -159,8 +159,6 @@ dependencies = [
 [[package]]
 name = "aeronet_transport"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08794e7ff02cf169ccc643d94327d2bea38f60d92136acd201b8705630d9e15e"
 dependencies = [
  "aeronet_io",
  "bevy_app",
@@ -3917,6 +3915,10 @@ dependencies = [
  "hex_ui",
  "hex_units",
  "hex_world",
+ "hex_world_contracts",
+ "hex_world_runtime",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "rand 0.8.7",
  "ron",
  "serde",
@@ -3953,7 +3955,10 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_multiplayer",
+ "hex_schematic",
  "hex_test_support",
+ "hex_world_contracts",
+ "hex_world_runtime",
  "rand 0.8.7",
  "ron",
  "serde",
@@ -3996,6 +4001,7 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_test_app",
+ "hex_world_contracts",
 ]
 
 [[package]]
@@ -4025,6 +4031,22 @@ dependencies = [
  "hex_multiplayer",
  "hex_test_app",
  "hex_units",
+ "hex_world_contracts",
+ "hex_world_runtime",
+]
+
+[[package]]
+name = "hex_schematic"
+version = "0.4.0"
+dependencies = [
+ "atomicwrites",
+ "hex_world_contracts",
+ "ron",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "spade",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -4069,6 +4091,7 @@ dependencies = [
  "hex_lattice",
  "hex_test_app",
  "hex_test_support",
+ "hex_world_contracts",
  "ron",
  "serde",
  "serde_json",
@@ -4082,6 +4105,38 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_test_app",
+]
+
+[[package]]
+name = "hex_world_contracts"
+version = "0.4.0"
+dependencies = [
+ "ron",
+ "serde",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "hex_world_runtime"
+version = "0.4.0"
+dependencies = [
+ "atomicwrites",
+ "hex_world_contracts",
+ "ron",
+ "serde",
+]
+
+[[package]]
+name = "hex_world_tool"
+version = "0.4.0"
+dependencies = [
+ "atomicwrites",
+ "hex_schematic",
+ "hex_world_contracts",
+ "hex_world_runtime",
+ "ron",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6074,14 +6129,20 @@ dependencies = [
 
 [[package]]
 name = "ringbuf"
-version = "0.4.8"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe47b720588c8702e34b5979cb3271a8b1842c7cb6f57408efa70c779363488c"
+checksum = "0b123165531e325df9079f56c036f2da4103a5d5abfef9e2fda4b9c34d1ef7aa"
 dependencies = [
  "crossbeam-utils",
  "portable-atomic",
  "portable-atomic-util",
 ]
+
+[[package]]
+name = "robust"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
 
 [[package]]
 name = "rodio"
@@ -6169,9 +6230,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "once_cell",
  "ring",
@@ -6214,9 +6275,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -6595,6 +6656,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "spade"
+version = "2.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9699399fd9349b00b184f5635b074f9ec93afffef30c853f8c875b32c0f8c7fa"
+dependencies = [
+ "hashbrown 0.16.1",
+ "num-traits",
+ "robust",
+ "smallvec",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6763,7 +6836,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

@@ -196,7 +196,8 @@ impl V3Recipe for DeepForestRecipe {
             },
             V3LayoutSettings::Ring7(_)
             | V3LayoutSettings::Ring19(_)
-            | V3LayoutSettings::Macro(_) => 0,
+            | V3LayoutSettings::Macro(_)
+            | V3LayoutSettings::Schematic(_) => 0,
         };
         (
             metrics.blocker_coverage_percent.abs_diff(target),
@@ -237,7 +238,10 @@ fn target_relief(settings: &ProceduralV3Settings) -> i32 {
             V3RecipeSettings::DeepForest(settings) => settings.max_relief,
             _ => 0,
         },
-        V3LayoutSettings::Ring7(_) | V3LayoutSettings::Ring19(_) | V3LayoutSettings::Macro(_) => 0,
+        V3LayoutSettings::Ring7(_)
+        | V3LayoutSettings::Ring19(_)
+        | V3LayoutSettings::Macro(_)
+        | V3LayoutSettings::Schematic(_) => 0,
     }
 }
 
@@ -1500,6 +1504,12 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Shore(_) => "Shore",
         V3RecipeSettings::DeepMountain(_) => "DeepMountain",
         V3RecipeSettings::CrystalAscent(_) => "CrystalAscent",
+        V3RecipeSettings::DesertTransition(_) => "DesertTransition",
+        V3RecipeSettings::DesertPlain(_) => "DesertPlain",
+        V3RecipeSettings::Dunes(_) => "Dunes",
+        V3RecipeSettings::Oasis(_) => "Oasis",
+        V3RecipeSettings::SandyIslets(_) => "SandyIslets",
+        V3RecipeSettings::WoodedIsland(_) => "WoodedIsland",
     }
 }
 

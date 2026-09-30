@@ -22,6 +22,7 @@ fn liquid_presentation_is_additive_non_pickable_and_tracks_grid_lifecycle() {
         .query_filtered::<Entity, With<HexGrid>>()
         .single(app.world())
         .expect("the first grid should exist");
+    let first_chunks = terrain_chunk_roots(&mut app);
     let first_presentations = liquid_presentations(&mut app);
     assert!(
         !first_presentations.is_empty(),
@@ -54,19 +55,24 @@ fn liquid_presentation_is_additive_non_pickable_and_tracks_grid_lifecycle() {
         .world_mut()
         .query_filtered::<Entity, With<HexGrid>>()
         .single(app.world())
-        .expect("the rebuilt grid should exist");
-    assert_ne!(second_grid, first_grid);
-    assert!(first_presentations
-        .iter()
-        .all(|(entity, _parent, _pickable)| app.world().get_entity(*entity).is_err()));
-    let second_presentations = liquid_presentations(&mut app);
-    assert!(!second_presentations.is_empty());
+        .expect("the edited grid should exist");
+    assert_eq!(second_grid, first_grid);
+    let second_chunks = terrain_chunk_roots(&mut app);
+    let affected = terrain_chunk_key(solid_edit.coord);
+    assert_ne!(second_chunks.get(&affected), first_chunks.get(&affected));
+    let retired_root = first_chunks
+        .get(&affected)
+        .copied()
+        .expect("the edited column should have an original chunk root");
     assert!(
-        second_presentations
-            .iter()
-            .all(|(_entity, parent, pickable)| *parent == second_grid
-                && *pickable == Pickable::IGNORE)
+        app.world().get_entity(retired_root).is_err(),
+        "the replaced chunk root remained alive"
     );
+    assert!(first_chunks
+        .iter()
+        .all(|(chunk, entity)| { *chunk == affected || second_chunks.get(chunk) == Some(entity) }));
+    let second_presentations = liquid_presentations(&mut app);
+    assert_eq!(second_presentations, first_presentations);
 
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
@@ -89,38 +95,286 @@ fn the_grid_has_a_single_parent() {
     assert_eq!(grids, 1, "tiles should hang off exactly one grid entity");
 }
 
-/// The contract between the map and everything else: a tile carries its rendered
-/// run's span, and its transform agrees with that span.
+/// Logical terrain runs are authoritative facts, not scene or picking entities.
 ///
-/// This is the invariant gameplay leans on to place a piece on a surface, and the
-/// one a run-meshing change is most likely to break silently — the tiles would still
-/// render, just in the wrong place.
+/// World placement remains exactly reconstructible from the public coordinate/span
+/// tuple, while the bounded render batch owns the actual transform and visibility.
+/// This prevents large worlds from feeding every material run through Bevy's scene
+/// propagation and culling systems.
 #[test]
-fn every_tile_transform_matches_its_span() {
+fn logical_tiles_are_scene_free_and_retain_exact_world_geometry() {
     let mut app = test_app();
     enter_gameplay(&mut app);
 
-    let mut query = app
-        .world_mut()
-        .query_filtered::<(&HexSpan, &Transform), With<HexTile>>();
+    let mut query = app.world_mut().query_filtered::<(
+        &TilePos,
+        &HexSpan,
+        Option<&Transform>,
+        Option<&GlobalTransform>,
+        Option<&Visibility>,
+        Option<&InheritedVisibility>,
+        Option<&ViewVisibility>,
+        Option<&Pickable>,
+        Option<&Mesh3d>,
+        Option<&MeshMaterial3d<StandardMaterial>>,
+        &ChildOf,
+    ), With<HexTile>>();
 
     let mut checked = 0;
-    for (span, transform) in query.iter(app.world()) {
+    let mut logical_roots = BTreeSet::new();
+    for (
+        position,
+        span,
+        transform,
+        global,
+        visibility,
+        inherited,
+        view,
+        pickable,
+        mesh,
+        material,
+        parent,
+    ) in query.iter(app.world())
+    {
         assert!(
-            (transform.translation.y - span.centre()).abs() < 1e-4,
-            "tile sits at {} but its span centre is {}",
-            transform.translation.y,
-            span.centre()
+            transform.is_none(),
+            "logical run entered transform propagation"
         );
         assert!(
-            (transform.scale.y - span.height()).abs() < 1e-4,
-            "tile is {} tall but its span is {}",
-            transform.scale.y,
-            span.height()
+            global.is_none(),
+            "logical run entered global-transform propagation"
         );
+        assert!(
+            visibility.is_none() && inherited.is_none() && view.is_none(),
+            "logical run entered visibility propagation or culling"
+        );
+        assert!(
+            pickable.is_none(),
+            "logical run entered the picking backend"
+        );
+        assert!(mesh.is_none(), "logical run still owns a draw mesh");
+        assert!(material.is_none(), "logical run still owns a PBR material");
+        let centre = position.coord.to_world(span.centre());
+        assert!(
+            centre.is_finite() && span.height().is_finite() && span.height() > 0.0,
+            "logical run no longer reconstructs finite positive world geometry"
+        );
+        logical_roots.insert(parent.parent());
         checked += 1;
     }
     assert!(checked > 0, "no tiles were checked");
+    assert!(!logical_roots.is_empty());
+    for root in logical_roots {
+        let owner = app.world().entity(root);
+        assert!(owner.get::<Transform>().is_none());
+        assert!(owner.get::<GlobalTransform>().is_none());
+        assert!(owner.get::<Visibility>().is_none());
+        assert!(owner.get::<InheritedVisibility>().is_none());
+        assert!(owner.get::<ViewVisibility>().is_none());
+        let chunk = owner
+            .get::<ChildOf>()
+            .expect("logical-run owner should preserve recursive chunk lifecycle")
+            .parent();
+        assert!(app.world().get::<TerrainChunkRoot>(chunk).is_some());
+    }
+}
+
+/// Exact run entities remain gameplay's stable projection but no longer each own a
+/// PBR draw. Every run appears in exactly one bounded, pickable chunk mesh instead.
+#[test]
+fn terrain_runs_are_lightweight_and_render_batches_cover_them_exactly_once() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let logical = {
+        let world = app.world_mut();
+        let mut tiles = world.query_filtered::<(
+            Entity,
+            &SubstanceId,
+            Option<&Transform>,
+            Option<&Visibility>,
+            Option<&Pickable>,
+            Option<&Mesh3d>,
+            Option<&MeshMaterial3d<StandardMaterial>>,
+        ), With<HexTile>>();
+        tiles
+            .iter(world)
+            .map(
+                |(entity, substance, transform, visibility, pickable, mesh, material)| {
+                    assert!(transform.is_none());
+                    assert!(visibility.is_none());
+                    assert!(pickable.is_none());
+                    assert!(mesh.is_none(), "logical terrain run still owns a draw mesh");
+                    assert!(
+                        material.is_none(),
+                        "logical terrain run still owns a PBR material"
+                    );
+                    (entity, *substance)
+                },
+            )
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert!(!logical.is_empty());
+
+    let mut represented = BTreeSet::new();
+    let mut batch_count = 0usize;
+    {
+        let world = app.world_mut();
+        let mut batches = world.query::<(
+            &TerrainRenderBatch,
+            &Mesh3d,
+            &MeshMaterial3d<StandardMaterial>,
+            &Pickable,
+            &ChildOf,
+        )>();
+        for (batch, _mesh, _material, pickable, parent) in batches.iter(world) {
+            assert_eq!(*pickable, Pickable::default());
+            assert!(
+                batch.runs().len() <= 512,
+                "terrain batch exceeded its bound"
+            );
+            let chunk = world
+                .get::<TerrainChunkRoot>(parent.parent())
+                .expect("every terrain batch should belong to one chunk root");
+            assert_eq!(batch.chunk(), *chunk);
+            for run in batch.runs() {
+                assert_eq!(
+                    logical.get(&run.entity()),
+                    Some(&batch.substance()),
+                    "a combined batch mixed logical runs from another substance"
+                );
+                assert!(
+                    represented.insert(run.entity()),
+                    "one logical run appeared in multiple terrain batches"
+                );
+            }
+            batch_count += 1;
+        }
+    }
+
+    assert_eq!(represented, logical.keys().copied().collect());
+    assert!(batch_count > 0);
+    assert!(
+        batch_count < logical.len(),
+        "batching did not reduce terrain draw cardinality"
+    );
+}
+
+#[test]
+fn cutaway_runs_and_their_render_batches_share_exact_ownership() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    let (coord, roof) =
+        diggable_run(&app, 1).expect("the fixture should contain one diggable terrain run");
+    let (edit_target, replacement) = {
+        let world = app.world();
+        let map = world.resource::<VoxelMap>();
+        let table = world.resource::<SubstanceTable>();
+        let metal = table
+            .id("metal")
+            .expect("the fixture substance table should contain metal");
+        map.columns()
+            .filter(|(candidate, _column)| {
+                *candidate != coord && terrain_chunk_key(*candidate) == terrain_chunk_key(coord)
+            })
+            .find_map(|(candidate, column)| {
+                hex_map::runs(column)
+                    .into_iter()
+                    .find(|run| table.is_diggable(run.substance) && run.substance != metal)
+                    .map(|run| (TilePos::new(candidate, run.top - 1), metal))
+            })
+            .expect("the roof chunk should contain another editable terrain run")
+    };
+    let region = InteriorRegionId(17);
+    install_roof_metadata(&mut app, coord, roof, region);
+    // Interior metadata is normally present before initial presentation. This
+    // focused fixture installs it after generation, then exercises the same exact
+    // chunk replacement path used when roof ownership changes after an edit.
+    app.world_mut().write_message(TerrainEdit::Set {
+        pos: edit_target,
+        substance: replacement,
+    });
+    app.update();
+    app.update();
+
+    let world = app.world_mut();
+    let logical_ownership = {
+        let mut tiles = world.query_filtered::<(Entity, &CutawayOccluder), With<HexTile>>();
+        tiles
+            .iter(world)
+            .map(|(entity, cutaway)| (entity, *cutaway))
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert!(!logical_ownership.is_empty());
+
+    let mut covered = BTreeSet::new();
+    let mut batches = world.query::<(&TerrainRenderBatch, Option<&CutawayOccluder>)>();
+    for (batch, cutaway) in batches.iter(world) {
+        for run in batch.runs() {
+            if let Some(expected) = logical_ownership.get(&run.entity()) {
+                assert_eq!(cutaway.copied(), Some(*expected));
+                covered.insert(run.entity());
+            }
+        }
+    }
+    assert_eq!(covered, logical_ownership.keys().copied().collect());
+}
+
+#[test]
+fn terrain_batch_mesh_assets_are_released_on_teardown_and_rebuilt_on_reentry() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let first_meshes = {
+        let world = app.world_mut();
+        let mut batches = world.query_filtered::<&Mesh3d, With<TerrainRenderBatch>>();
+        batches
+            .iter(world)
+            .map(|mesh| mesh.0.id())
+            .collect::<BTreeSet<_>>()
+    };
+    assert!(!first_meshes.is_empty());
+    assert!(first_meshes.iter().all(|id| app
+        .world()
+        .resource::<Assets<Mesh>>()
+        .get(*id)
+        .is_some()));
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(
+        app.world_mut()
+            .query_filtered::<Entity, With<TerrainRenderBatch>>()
+            .iter(app.world())
+            .count(),
+        0,
+        "teardown retained terrain batch entities"
+    );
+    assert!(first_meshes.iter().all(|id| app
+        .world()
+        .resource::<Assets<Mesh>>()
+        .get(*id)
+        .is_none()));
+
+    enter_gameplay(&mut app);
+    let second_meshes = {
+        let world = app.world_mut();
+        let mut batches = world.query_filtered::<&Mesh3d, With<TerrainRenderBatch>>();
+        batches
+            .iter(world)
+            .map(|mesh| mesh.0.id())
+            .collect::<BTreeSet<_>>()
+    };
+    assert_eq!(second_meshes.len(), first_meshes.len());
+    assert!(second_meshes.iter().all(|id| app
+        .world()
+        .resource::<Assets<Mesh>>()
+        .get(*id)
+        .is_some()));
 }
 
 /// Every tile carries the complete map/gameplay component contract.

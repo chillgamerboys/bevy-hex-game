@@ -11,6 +11,10 @@ mod duel_player_tests;
 #[path = "visibility_tests.rs"]
 mod visibility_tests;
 
+#[path = "liquid_query_tests.rs"]
+mod liquid_query_tests;
+#[path = "probe_cache_tests.rs"]
+mod probe_cache_tests;
 #[path = "recovery_tests.rs"]
 mod recovery_tests;
 
@@ -58,6 +62,7 @@ fn fixture(
     };
     let materials = ArenaMaterials {
         stone: SubstanceId(1),
+        reinforced_stone: None,
         grass: SubstanceId(2),
         dirt: SubstanceId(3),
         bedrock: SubstanceId(4),
@@ -72,7 +77,7 @@ fn fixture(
     session.advance(ActorIntent::default(), &view, geometry, materials, &tuning);
     (session, view, geometry, materials, tuning)
 }
-fn pose(session: &mut ArenaSession, id: u8, feet: Vec3, aim: Vec3) {
+fn pose(session: &mut ArenaSession, id: crate::ActorId, feet: Vec3, aim: Vec3) {
     let a = session
         .actors
         .iter_mut()
@@ -89,7 +94,7 @@ fn pose(session: &mut ArenaSession, id: u8, feet: Vec3, aim: Vec3) {
 }
 fn start(
     session: &mut ArenaSession,
-    id: u8,
+    id: crate::ActorId,
     kind: CreatureAbility,
     aim: Vec3,
     tuning: &ArenaTuning,
@@ -189,7 +194,7 @@ fn goblin_swipe_has_real_windup_single_hit_and_physical_terrain_contact() {
     pose(&mut session, 1, Vec3::ZERO, Vec3::X);
     pose(&mut session, 0, Vec3::X * 1.3, Vec3::NEG_X);
     for a in session.actors.iter_mut().skip(2) {
-        a.feet = Vec3::X * 12.0 + Vec3::Z * f32::from(a.id);
+        a.feet = Vec3::X * 12.0 + Vec3::Z * f32::from(u16::try_from(a.id).unwrap_or_default());
         a.previous_feet = a.feet;
     }
     start(&mut session, 1, CreatureAbility::Swipe, Vec3::X, &tuning);
@@ -448,9 +453,7 @@ fn duel_outcomes_ignore_all_encounter_tuning_and_keep_two_actor_identity() {
     for tick in 0..1800 {
         let input = ActorIntent {
             aim: Vec3::X,
-            selected: Some(Spell::AreaBlast),
-            cast_pressed: tick % 90 == 0,
-            cast_released: tick % 90 == 0,
+            high_jump: tick % 90 == 0,
             ..Default::default()
         };
         let ca = a.advance(input, &view, geometry, materials, &tuning);
@@ -576,7 +579,12 @@ fn search_expires_into_return_and_preserves_damage_when_home_is_reached() {
         .snapshot
         .home;
     for actor in session.actors.iter_mut().skip(1) {
-        actor.feet = home + Vec3::new(5.0, 0.0, f32::from(actor.id) * 0.7);
+        actor.feet = home
+            + Vec3::new(
+                5.0,
+                0.0,
+                f32::from(u16::try_from(actor.id).unwrap_or_default()) * 0.7,
+            );
         actor.previous_feet = actor.feet;
         actor.hp = 30.0;
     }
@@ -615,7 +623,11 @@ fn shaman_waits_for_reaction_charges_then_cancels_if_cover_closes_before_release
     pose(&mut session, 1, Vec3::new(-5.0, 0.0, 0.0), Vec3::X);
     pose(&mut session, 0, Vec3::new(5.0, 0.0, 0.0), Vec3::NEG_X);
     for a in session.actors.iter_mut().skip(2) {
-        a.feet = Vec3::new(15.0, 0.0, f32::from(a.id) * 2.0);
+        a.feet = Vec3::new(
+            15.0,
+            0.0,
+            f32::from(u16::try_from(a.id).unwrap_or_default()) * 2.0,
+        );
         a.previous_feet = a.feet;
     }
     let mut brain = session.encounter.brains.remove(&1).expect("brain");
@@ -669,7 +681,7 @@ fn shaman_waits_for_reaction_charges_then_cancels_if_cover_closes_before_release
 }
 
 #[test]
-fn dragon_damage_triggers_retreat_flight_then_regeneration_and_landing() {
+fn dragon_critical_health_triggers_escape_flight_then_regeneration_and_landing() {
     let (mut session, view, geometry, materials, tuning) = fixture(ArenaEncounter::Dragon);
     pose(&mut session, 1, Vec3::ZERO, Vec3::NEG_Z);
     pose(&mut session, 0, Vec3::NEG_Z * 8.0, Vec3::Z);
@@ -687,7 +699,10 @@ fn dragon_damage_triggers_retreat_flight_then_regeneration_and_landing() {
     let dragon = session.actors.iter().find(|a| a.id == 1).expect("dragon");
     assert!(dragon.flying && dragon.feet.y > 0.3);
     assert!((dragon.hp - 70.0).abs() < 0.001);
-    assert!(!session.barriers().is_empty());
+    assert!(
+        session.barriers().is_empty(),
+        "critical escape keeps moving"
+    );
     session.bot_enabled = false;
     ticks(&mut session, 500, &view, geometry, materials, &tuning);
     let dragon = session.actors.iter().find(|a| a.id == 1).expect("dragon");
@@ -1104,8 +1119,8 @@ fn returning_shadow_defends_only_nearby_visible_contact_and_keeps_homeward_motio
             .get(&1)
             .expect("shadow")
             .casts
-            .get(Spell::AreaBlast.index()),
-        Some(&1)
+            .get(Spell::HighJump.index()),
+        Some(&0)
     );
     let shadow = session.actors.iter().find(|a| a.id == 1).expect("shadow");
     assert!(
@@ -1226,4 +1241,42 @@ fn breath_chips_intersected_hex_face_even_when_its_center_is_outside_the_cone() 
         .filter(|i| i.volume.contains(&edge))
         .all(|i| i.power == tuning.encounters.breath_terrain_power));
     assert!(impacts.iter().all(|i| !i.volume.contains(&outside)));
+}
+
+#[path = "troll_tests.rs"]
+mod troll_tests;
+
+#[test]
+fn recovered_dragon_returning_from_high_refuge_keeps_flight_control() {
+    let (mut session, view, geometry, _, tuning) = fixture(ArenaEncounter::Dragon);
+    let mut actor = session
+        .actors
+        .iter()
+        .find(|a| a.id == 1)
+        .expect("dragon")
+        .clone();
+    actor.feet += Vec3::new(6.0, 8.0, 0.0);
+    actor.previous_feet = actor.feet;
+    actor.flying = true;
+    actor.hp = actor.max_hp;
+    let mut party = session.encounter.runtime.remove(0);
+    party.snapshot.phase = PartyPhase::Returning;
+    party.knowledge = None;
+    let mut brain = session.encounter.brains.remove(&1).expect("brain");
+    let (motion, _) = brain.intent(
+        &actor,
+        &party,
+        &session.actors,
+        &[],
+        &[],
+        &session.collision,
+        &view,
+        geometry,
+        &tuning,
+        100,
+    );
+    assert!(
+        motion.flight,
+        "healed dragon must fly out of its elevated refuge"
+    );
 }
