@@ -28,7 +28,9 @@ pub const CLIFF: u8 = 4;
 pub const OBJECT_CONTACT: u8 = 8;
 /// Decorative ground cover retains its original support cap.
 pub const GROUND_COVER: u8 = 16;
-const KNOWN_PROTECTION: u8 = WET | STACKED | CLIFF | OBJECT_CONTACT | GROUND_COVER;
+/// Exact native outer cell ring, shared with ordinary detailed chunk presentation.
+pub const PATCH_BOUNDARY: u8 = 32;
+const KNOWN_PROTECTION: u8 = WET | STACKED | CLIFF | OBJECT_CONTACT | GROUND_COVER | PATCH_BOUNDARY;
 /// Representation limits, checked before generating presentation assets.
 pub const MAX_SURFACE_CHUNKS: usize = 4096;
 /// One complete fixed-size source profile index per represented column.

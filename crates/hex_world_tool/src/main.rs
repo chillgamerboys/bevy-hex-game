@@ -21,7 +21,7 @@ use hex_world_runtime::{publish_revision, FileChunkSource, IoLimits};
 use serde::{Deserialize, Serialize};
 
 const MAX_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
-const USAGE: &str = "worldc grand-compile --source GRAND.ron --output DIRECTORY\nworldc northern-compile --source NORTHERN.ron --output DIRECTORY\nworldc validate --source WORLD.ron\nworldc compile --source WORLD.ron --output DIRECTORY\nworldc preview --package DIRECTORY --output REVIEW.html\nworldc inspect --package DIRECTORY\nworldc probe --package DIRECTORY --at q,r\nworldc survey --package DIRECTORY --output SURVEY.json\nworldc benchmark --source WORLD.ron --output RECEIPT.json [--iterations 20]\nworldc edit-benchmark --series SERIES.ron --output RECEIPT.json\nworldc runtime-benchmark --series SERIES.ron --output RECEIPT.json\nworldc replication-benchmark --package DIRECTORY --output RECEIPT.json\n\nBuild worldc once. Authoring commands read source files at runtime and never invoke Cargo.\n";
+const USAGE: &str = "worldc grand-compile --source GRAND.ron --output DIRECTORY [--presentation-sample crystal-four]\nworldc northern-compile --source NORTHERN.ron --output DIRECTORY\nworldc validate --source WORLD.ron\nworldc compile --source WORLD.ron --output DIRECTORY\nworldc preview --package DIRECTORY --output REVIEW.html\nworldc inspect --package DIRECTORY\nworldc probe --package DIRECTORY --at q,r\nworldc survey --package DIRECTORY --output SURVEY.json\nworldc benchmark --source WORLD.ron --output RECEIPT.json [--iterations 20]\nworldc edit-benchmark --series SERIES.ron --output RECEIPT.json\nworldc runtime-benchmark --series SERIES.ron --output RECEIPT.json\nworldc replication-benchmark --package DIRECTORY --output RECEIPT.json\n\nBuild worldc once. Authoring commands read source files at runtime and never invoke Cargo.\n";
 
 fn main() -> ExitCode {
     match execute(std::env::args().skip(1)) {
@@ -54,7 +54,8 @@ impl Arguments {
         }
         let allowed: &[&str] = match command.as_str() {
             "validate" => &["--source"],
-            "compile" | "northern-compile" | "grand-compile" => &["--source", "--output"],
+            "compile" | "northern-compile" => &["--source", "--output"],
+            "grand-compile" => &["--source", "--output", "--presentation-sample"],
             "preview" | "replication-benchmark" | "survey" => &["--package", "--output"],
             "replica-worker" => &["--package", "--save", "--connect"],
             "inspect" => &["--package"],
@@ -78,7 +79,10 @@ impl Arguments {
                 return Err(format!("duplicate argument {flag}").into());
             }
         }
-        for flag in allowed.iter().filter(|flag| **flag != "--iterations") {
+        for flag in allowed
+            .iter()
+            .filter(|flag| !matches!(**flag, "--iterations" | "--presentation-sample"))
+        {
             if !values.contains_key(*flag) {
                 return Err(format!("{command} requires {flag}").into());
             }
@@ -120,9 +124,14 @@ fn execute(arguments: impl IntoIterator<Item = String>) -> Result<String, Box<dy
     let arguments = Arguments::parse(arguments)?;
     match arguments.command.as_str() {
         "help" => Ok(USAGE.to_owned()),
-        "grand-compile" => {
-            grand::compile(&arguments.path("--source")?, &arguments.path("--output")?)
-        }
+        "grand-compile" => grand::compile(
+            &arguments.path("--source")?,
+            &arguments.path("--output")?,
+            arguments
+                .values
+                .get("--presentation-sample")
+                .map(String::as_str),
+        ),
         "northern-compile" => {
             northern::compile(&arguments.path("--source")?, &arguments.path("--output")?)
         }
@@ -498,6 +507,51 @@ mod tests {
 
     fn parse(values: &[&str]) -> Result<Arguments, Box<dyn Error>> {
         Arguments::parse(values.iter().map(|value| (*value).to_owned()))
+    }
+
+    #[test]
+    fn grand_surface_sample_is_explicit_optional_and_command_scoped() {
+        let ordinary = Arguments::parse(
+            ["grand-compile", "--source", "a.ron", "--output", "fresh"].map(str::to_owned),
+        )
+        .unwrap();
+        assert!(!ordinary.values.contains_key("--presentation-sample"));
+        let sample = Arguments::parse(
+            [
+                "grand-compile",
+                "--source",
+                "a.ron",
+                "--output",
+                "fresh",
+                "--presentation-sample",
+                "crystal-four",
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(
+            sample
+                .values
+                .get("--presentation-sample")
+                .map(String::as_str),
+            Some("crystal-four")
+        );
+        assert!(Arguments::parse(
+            [
+                "northern-compile",
+                "--source",
+                "a.ron",
+                "--output",
+                "fresh",
+                "--presentation-sample",
+                "crystal-four"
+            ]
+            .map(str::to_owned)
+        )
+        .is_err());
+        assert!(
+            grand::compile(Path::new("missing"), Path::new("missing"), Some("unknown")).is_err()
+        );
     }
 
     #[test]

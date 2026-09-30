@@ -16,6 +16,9 @@ use std::{
     sync::{mpsc, Arc, Mutex, OnceLock},
 };
 
+#[path = "grand_surface_sample.rs"]
+mod surface_sample;
+
 struct Completion {
     shading_authority: BTreeMap<ChunkId, BTreeMap<ChunkId, Option<u64>>>,
     shading_metrics: BTreeMap<ChunkId, crate::v4::grand_terrain_shading::Metrics>,
@@ -32,6 +35,7 @@ struct Completion {
 }
 #[derive(Resource)]
 struct Renderer {
+    surface_sample: Option<surface_sample::State>,
     shading_budget_fallbacks: usize,
     shading_authority: BTreeMap<ChunkId, BTreeMap<ChunkId, Option<u64>>>,
     shading_metrics: BTreeMap<ChunkId, crate::v4::grand_terrain_shading::Metrics>,
@@ -335,6 +339,9 @@ fn draw(world: &mut World) {
             Ok(r) => world.insert_resource(r),
             Err(e) => {
                 error!("Northern renderer: {e}");
+                if surface_sample::requested() {
+                    world.write_message(bevy::app::AppExit::error());
+                }
                 return;
             }
         }
@@ -467,6 +474,7 @@ fn draw(world: &mut World) {
                                     }
                                     renderer.terrain_edges.extend(completion.edges);
                                     for (chunk, mesh) in completion.proxies {
+                                        if renderer.surface_sample.as_ref().is_some_and(|s| s.owns(chunk)) { continue; }
                                         if let Some((_, handle)) = renderer.proxies.get(&chunk) {
                                             if let Some(mut old) =
                                                 world.resource_mut::<Assets<Mesh>>().get_mut(handle)
@@ -484,6 +492,23 @@ fn draw(world: &mut World) {
                     }
                 }
             }
+            if let Some(sample) = &mut renderer.surface_sample {
+                match sample.refresh(&state) {
+                    Ok(Some(products)) => {
+                        for (chunk, mesh) in products {
+                            if let Some((_, handle)) = renderer.proxies.get(&chunk) {
+                                if let Some(mut old) = world.resource_mut::<Assets<Mesh>>().get_mut(handle) { *old = mesh; }
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        error!("GRAND_SURFACE_SAMPLE explicit diagnostic failure: {error}");
+                        world.write_message(bevy::app::AppExit::error());
+                        return;
+                    }
+                }
+            }
             super::grand_landmarks::sync(world, &state, &renderer.visible_objects);
             super::grand_forest::sync(world, &state, &renderer.visible_objects);
             // The static seabed covers the whole finite world. Only the bounded
@@ -496,7 +521,8 @@ fn draw(world: &mut World) {
                 .collect();
             super::grand_ground_cover::sync(world, &state, &renderer.accepted, &detailed, center);
             super::grand_water::set_detailed(world, &detailed);
-            let hidden: BTreeSet<_> = detailed.union(&suppressed).copied().collect();
+            let hidden: BTreeSet<_> = detailed.iter().copied().chain(suppressed.iter().copied()
+                .filter(|c| !renderer.surface_sample.as_ref().is_some_and(|s| s.owns(*c)))).collect();
             for chunk in renderer.hidden_proxies.symmetric_difference(&hidden) {
                 let Some((entity, _)) = renderer.proxies.get(chunk) else {
                     continue;
@@ -761,6 +787,7 @@ fn current_revision(state: &StreamedArena, chunk: ChunkId) -> Option<u64> {
     state.edits.revision(chunk)
 }
 fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, String> {
+    let (surface_sample, mut sample_meshes) = surface_sample::State::new(state)?;
     // Fixed at presenter creation: no live asset mutation or extra lifecycle owner.
     let dry_finish = dry_material_finish(&state.overview.world_id);
     let presenter = TerrainPresenter::with_limits_and_dry_finish(
@@ -794,7 +821,10 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
     for descriptor in &state.runtime.manifest().chunks {
         let c = descriptor.coordinate;
         let edges = nearby_transition_edges(c, &immutable_edges);
-        if let Some(mesh) = proxy_with_edges(&state.overview, c, &edges) {
+        if let Some(mesh) = sample_meshes
+            .remove(&c)
+            .or_else(|| proxy_with_edges(&state.overview, c, &edges))
+        {
             let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
             let entity = world
                 .spawn((
@@ -809,6 +839,7 @@ fn new_renderer(world: &mut World, state: &StreamedArena) -> Result<Renderer, St
         }
     }
     Ok(Renderer {
+        surface_sample,
         shading_budget_fallbacks: 0,
         shading_authority: BTreeMap::new(),
         shading_metrics: BTreeMap::new(),

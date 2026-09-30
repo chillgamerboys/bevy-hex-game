@@ -20,6 +20,7 @@ mod library_finish;
 pub use biomes::GrandBiomeMap;
 pub use flow::RIVER_PHASE_DIRECTION;
 mod sites;
+mod surface_overview;
 mod terrain;
 #[cfg(test)]
 mod terrain_tests;
@@ -636,6 +637,13 @@ impl GrandCompiler {
             features: vec![],
             fingerprint: 0,
         }
+    }
+    /// Explicit, diagnostic-only four-chunk Crystal presentation with complete source halo.
+    /// It does not alter terrain, water, objects, or the ordinary overview elsewhere.
+    pub fn crystal_surface_sample(
+        &self,
+    ) -> Result<super::northern::terrain_surface::TerrainSurfaceOverview, ContractError> {
+        surface_overview::compile(self)
     }
     /// Sample actual quantized relief and named observation locations.
     #[expect(

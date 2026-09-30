@@ -93,9 +93,21 @@ pub(super) fn validate_overview(
     ) {
         (None, None) => {}
         (Some(surface), Some(expected)) if manifest.world_id == "grand-v4" => {
-            surface
-                .validate_profiles(overview.radius, overview.level_bounds, &overview.materials)
-                .map_err(|error| error.to_string())?;
+            let builder = hex_schematic::v4::northern::terrain_surface::SurfaceBuilder::new(
+                surface,
+                overview.radius,
+                overview.level_bounds,
+                &overview.materials,
+                f64::from(overview.level_height),
+            )
+            .map_err(|error| error.to_string())?;
+            for chunk in &surface.chunks {
+                if let Some(patch) = &chunk.surface {
+                    builder
+                        .certify_patch(chunk.coordinate, patch)
+                        .map_err(|error| error.to_string())?;
+                }
+            }
             if surface.fingerprint().map_err(|error| error.to_string())? != *expected {
                 return Err("Grand terrain surface differs from its sealed package".into());
             }

@@ -34,9 +34,25 @@ struct Receipt {
     sailing_verified_in_engine: bool,
     strict: bool,
     presentation_reviewed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostic_presentation_sample: Option<&'static str>,
+    diagnostic_surface_chunks: Vec<hex_world_contracts::ChunkId>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    diagnostic_presentation_limitations: Vec<&'static str>,
 }
 /// Compile a runtime-loaded northern source into a new immutable V4 directory.
-pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
+pub fn compile(
+    source: &Path,
+    output: &Path,
+    sample: Option<&str>,
+) -> Result<String, Box<dyn Error>> {
+    let sample = match sample {
+        None => false,
+        Some("crystal-four") => true,
+        Some(_) => {
+            return Err("only the diagnostic presentation sample crystal-four is supported".into())
+        }
+    };
     if output.exists() {
         return Err("output exists; use a fresh immutable package directory".into());
     }
@@ -103,6 +119,9 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
         });
     }
     let mut overview = compiler.overview();
+    if sample {
+        overview.terrain_surface = Some(compiler.crystal_surface_sample()?);
+    }
     if let Some(surface) = &overview.terrain_surface {
         manifest.presentation_fingerprints.insert(
             hex_schematic::v4::northern::terrain_surface::TERRAIN_SURFACE_KEY.into(),
@@ -144,14 +163,14 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
         canonical_mainland_columns: compiler.source.canonical_mainland_columns,
         mainland_target_columns: compiler.source.canonical_mainland_columns * 7,
         mainland_tolerance_columns: compiler.mainland_tolerance_columns,
-        mainland_area_ratio: compiler.mainland_columns as f64
-            / compiler.source.canonical_mainland_columns as f64,
+        mainland_area_ratio: f64::from(u32::try_from(compiler.mainland_columns)?)
+            / f64::from(u32::try_from(compiler.source.canonical_mainland_columns)?),
         crystal_columns: compiler.crystal_columns,
         canonical_crystal_columns: compiler.source.canonical_crystal_columns,
         crystal_target_columns: compiler.source.canonical_crystal_columns * 7,
         crystal_authored_columns: compiler.crystal_columns,
-        crystal_area_ratio: compiler.crystal_columns as f64
-            / compiler.source.canonical_crystal_columns as f64,
+        crystal_area_ratio: f64::from(u32::try_from(compiler.crystal_columns)?)
+            / f64::from(u32::try_from(compiler.source.canonical_crystal_columns)?),
         crystal_footprint_basis: if compiler.source.geography.is_some() {
             "authored_outer_hex"
         } else {
@@ -162,6 +181,22 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
         sailing_verified_in_engine: false,
         strict: true,
         presentation_reviewed: false,
+        diagnostic_presentation_sample: sample.then_some("crystal-four"),
+        diagnostic_presentation_limitations: if sample {
+            vec![
+                "Outer legacy interface unresolved; omitted old-region surfaces retained",
+                "Four-chunk diagnostic only; no global terrain presentation acceptance",
+            ]
+        } else {
+            vec![]
+        },
+        diagnostic_surface_chunks: overview
+            .terrain_surface
+            .iter()
+            .flat_map(|s| &s.chunks)
+            .filter(|c| c.surface.is_some())
+            .map(|c| c.coordinate)
+            .collect(),
     };
     fs::write(
         stage.join("compile-receipt.json"),
@@ -175,6 +210,10 @@ pub fn compile(source: &Path, output: &Path) -> Result<String, Box<dyn Error>> {
 mod tests {
     use super::*;
     #[test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "This fixture propagates setup errors and uses assertions for the measured source contract."
+    )]
     fn approved_r02_plain_geography_has_measured_area_and_exact_routes(
     ) -> Result<(), Box<dyn Error>> {
         let mut spec: GrandSpec =
@@ -188,7 +227,9 @@ mod tests {
         // The original reference is the entire radius-32 feature (3169 cells),
         // not its hollow well. A clean authored polygon rounds to +0.081% of 7x.
         assert_eq!(compiler.crystal_columns, 22201);
-        assert!((compiler.crystal_columns as f64 / (3169. * 7.) - 1.).abs() < 0.002);
+        assert!(
+            (f64::from(u32::try_from(compiler.crystal_columns)?) / (3169. * 7.) - 1.).abs() < 0.002
+        );
         let sites = serde_json::to_value(compiler.sites(0)?)?;
         let overview = compiler.overview();
         let inland = overview
