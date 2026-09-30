@@ -5,6 +5,9 @@
 //! The enclosing manifest binds this entire payload by its canonical fingerprint.
 mod build;
 mod certificate;
+mod faces;
+
+pub use faces::{FaceKind, FacePoint, SurfaceFace, SurfaceFaces};
 
 use hex_world_contracts::{ChunkId, ContractError, MaterialSpec, VoxelRun, WorldHex, CHUNK_SIZE};
 use serde::{Deserialize, Serialize};
@@ -17,7 +20,7 @@ pub const TERRAIN_SURFACE_KEY: &str = "grand-terrain-surface-v1";
 pub const OUTSIDE_PROFILE: u16 = u16::MAX;
 /// Source protection: any liquid occupies this column.
 pub const WET: u8 = 1;
-/// Source protection: disconnected solid intervals share this column.
+/// Source protection: a solid floor/roof has empty space beneath it.
 pub const STACKED: u8 = 2;
 /// Source protection: an exterior discontinuity cannot share an approximate cap.
 pub const CLIFF: u8 = 4;
@@ -147,6 +150,18 @@ impl<'a> SurfaceBuilder<'a> {
     pub fn build_patch(&self, coordinate: ChunkId) -> Result<MacroSurface, ContractError> {
         build::build_patch(&self.source, coordinate, self.level_height)
     }
+    /// Derive bounded disposable faces after independently certifying this cap.
+    /// Protected strata keep their exact caps, ceilings and interval side ownership.
+    /// The caller chooses the explicit temporary vertex budget; no output is truncated.
+    pub fn build_faces(
+        &self,
+        coordinate: ChunkId,
+        surface: &MacroSurface,
+        maximum_vertices: usize,
+    ) -> Result<SurfaceFaces, ContractError> {
+        self.certify_patch(coordinate, surface)?;
+        faces::build_faces(&self.source, coordinate, surface, maximum_vertices)
+    }
     /// Independently verify exported topology, coverage, canonical seams and error.
     pub fn certify_patch(
         &self,
@@ -218,8 +233,12 @@ impl TerrainSurfaceOverview {
             stacked_profiles.push(
                 profile
                     .runs
-                    .windows(2)
-                    .any(|pair| matches!(pair,[a,b] if a.top<b.bottom)),
+                    .first()
+                    .is_some_and(|run| i32::from(run.bottom) > levels[0])
+                    || profile
+                        .runs
+                        .windows(2)
+                        .any(|pair| matches!(pair,[a,b] if a.top<b.bottom)),
             );
         }
         let mut previous = None;

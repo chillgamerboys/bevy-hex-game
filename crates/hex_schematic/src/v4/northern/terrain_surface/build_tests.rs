@@ -244,3 +244,345 @@ fn checked_batch_refuses_truncated_duplicate_or_unprotected_stacked_profiles() {
     ];
     assert!(builder(&stacked).is_err());
 }
+
+#[test]
+fn interval_faces_keep_well_cliff_and_stacked_floors_roofs_and_voids() {
+    let mut overview = field(|q, _| (if q < 8 { 817 } else { 530 }, CLIFF));
+    let coordinate = ChunkId { q: 0, r: 0 };
+    let sample = builder(&overview).expect("checked source");
+    let surface = sample.build_patch(coordinate).expect("empty macro domain");
+    let faces = sample
+        .build_faces(coordinate, &surface, 30_000)
+        .expect("exact cliff faces");
+    assert!(
+        faces
+            .faces
+            .iter()
+            .filter(|f| f.kind == FaceKind::Side)
+            .any(|f| {
+                let lo = f
+                    .points
+                    .iter()
+                    .map(|p| p.level)
+                    .fold(f64::INFINITY, f64::min);
+                let hi = f
+                    .points
+                    .iter()
+                    .map(|p| p.level)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                (lo - 530.0).abs() < 1e-9 && (hi - 817.0).abs() < 1e-9
+            }),
+        "the real 100.45-unit well face is preserved, never welded upward"
+    );
+    assert!(
+        sample.build_faces(coordinate, &surface, 3).is_err(),
+        "budget never truncates"
+    );
+    let cavity = SolidProfile {
+        runs: vec![
+            SolidRun {
+                bottom: 0,
+                top: 80,
+                material: 0,
+            },
+            SolidRun {
+                bottom: 100,
+                top: 110,
+                material: 0,
+            },
+        ],
+    };
+    overview.profiles = vec![cavity];
+    for chunk in &mut overview.chunks {
+        chunk.profiles.fill(0);
+        chunk.protection.fill(STACKED);
+    }
+    let sample = builder(&overview).expect("stacked source");
+    let surface = sample.build_patch(coordinate).expect("protected only");
+    let faces = sample
+        .build_faces(coordinate, &surface, 30_000)
+        .expect("cavity faces");
+    assert_eq!(faces.faces.len(), 256 * 3);
+    assert_eq!(
+        faces
+            .faces
+            .iter()
+            .filter(|f| f.kind == FaceKind::Ceiling)
+            .count(),
+        256
+    );
+    for face in faces.faces {
+        let expected = if face.kind == FaceKind::Ceiling {
+            100.0
+        } else {
+            let level = face.points.first().expect("face point").level;
+            assert!((level - 80.0).abs() < 1e-9 || (level - 110.0).abs() < 1e-9);
+            level
+        };
+        assert!(face
+            .points
+            .iter()
+            .all(|p| (p.level - expected).abs() < 1e-9));
+    }
+}
+
+#[test]
+fn macro_interfaces_clip_material_strata_without_inverting_or_filling_voids() {
+    let mut overview = field(|q, r| (100 + q + r, if q == 8 { CLIFF } else { 0 }));
+    // Two opaque material strata without a gap. The upper one can end below a
+    // macro corner, or be partly clipped by it; neither exposes a buried cap.
+    for profile in &mut overview.profiles {
+        let top = profile.runs.first().expect("run").top;
+        profile.runs = vec![
+            SolidRun {
+                bottom: 0,
+                top: top - 1,
+                material: 0,
+            },
+            SolidRun {
+                bottom: top - 1,
+                top,
+                material: 1,
+            },
+        ];
+    }
+    let materials = vec![
+        hex_world_contracts::MaterialSpec {
+            id: "rock".into(),
+            solid: true,
+            diggable: true,
+            color: [100, 100, 100, 255],
+        },
+        hex_world_contracts::MaterialSpec {
+            id: "soil".into(),
+            solid: true,
+            diggable: true,
+            color: [110, 80, 60, 255],
+        },
+    ];
+    let source =
+        SurfaceBuilder::new(&overview, 128, [0, 3000], &materials, 0.35).expect("material source");
+    let c = ChunkId { q: 0, r: 0 };
+    let patch = source.build_patch(c).expect("constrained cap");
+    let faces = source
+        .build_faces(c, &patch, 30_000)
+        .expect("clipped faces");
+    assert!(faces.faces.iter().any(|f| f.kind == FaceKind::Side));
+    assert_eq!(
+        faces
+            .faces
+            .iter()
+            .filter(|f| f.kind == FaceKind::Cap)
+            .count(),
+        16
+    );
+    assert!(!faces.faces.iter().any(|f| f.kind == FaceKind::Ceiling));
+    assert!(faces
+        .faces
+        .iter()
+        .all(|f| f.points.iter().all(|p| p.level.is_finite())));
+    // Sample every side triangle's interior: exactly one rendered solid owner
+    // must cover the point. Shared boundary coordinates alone are insufficient.
+    for face in faces.faces.iter().filter(|f| f.kind == FaceKind::Side) {
+        let a = face.points.first().expect("polygon start");
+        for pair in face.points.windows(2).skip(1) {
+            let [b, c] = pair else { unreachable!() };
+            let point = [
+                (a.lattice[0] + b.lattice[0] + c.lattice[0]) / 3.0,
+                (a.lattice[1] + b.lattice[1] + c.lattice[1]) / 3.0,
+            ];
+            let level = (a.level + b.level + c.level) / 3.0;
+            let mut covered = 0;
+            for r in -1..=16_i16 {
+                for q in -1..=16_i16 {
+                    if !certificate::inside_hex(point, [q, r]) {
+                        continue;
+                    }
+                    let top = 100.0 + f64::from(q + r);
+                    let cap = if q == 8 {
+                        top
+                    } else {
+                        let domain = build::Domain::new(&source.source, ChunkId { q: 0, r: 0 })
+                            .expect("domain");
+                        let corners = build::CORNERS.map(|[a, b]| [3 * q + a, 3 * r + b]);
+                        corners
+                            .iter()
+                            .copied()
+                            .zip(corners.iter().copied().cycle().skip(1))
+                            .take(6)
+                            .find_map(|(a, b)| {
+                                let [ax, az] = a.map(f64::from);
+                                let [bx, bz] = b.map(f64::from);
+                                let dx = bx - ax;
+                                let dz = bz - az;
+                                let cross = dx * (point[1] - az) - dz * (point[0] - ax);
+                                let t = ((point[0] - ax) * dx + (point[1] - az) * dz)
+                                    / (dx * dx + dz * dz);
+                                if cross.abs() > 1e-7 || !(-1e-7..=1.0 + 1e-7).contains(&t) {
+                                    return None;
+                                }
+                                let ha = f64::from(
+                                    domain.vertex(&source.source, a).expect("corner").half_level,
+                                ) * 0.5;
+                                let hb = f64::from(
+                                    domain.vertex(&source.source, b).expect("corner").half_level,
+                                ) * 0.5;
+                                Some(ha + (hb - ha) * t)
+                            })
+                            .expect("side sample lies on the actual hex boundary")
+                    };
+                    if level > 0.0 && level < cap - 1e-8 {
+                        covered += 1;
+                    }
+                }
+            }
+            assert_eq!(
+                covered, 1,
+                "exact/macro side must separate solid from air at {point:?}/{level}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "explicit immutable package, profile fixture and fresh output directory required"]
+fn actual_crystal_profiles_export_certified_caps_and_exact_interval_faces() {
+    use hex_world_contracts::{ChunkPackage, WorldManifest};
+    use std::path::PathBuf;
+    let root =
+        PathBuf::from(std::env::var("HEX_SURFACE_PACKAGE").expect("explicit immutable package"));
+    let input =
+        PathBuf::from(std::env::var("HEX_SURFACE_FIXTURE").expect("explicit profile fixture"));
+    let output =
+        PathBuf::from(std::env::var("HEX_SURFACE_OUTPUT").expect("fresh output directory"));
+    let expected: u64 = std::env::var("HEX_SURFACE_EXPECTED_PACKAGE")
+        .expect("expected package identity")
+        .parse()
+        .expect("u64 package identity");
+    assert!(
+        !output.exists(),
+        "never replace an earlier prototype receipt"
+    );
+    let mut source: TerrainSurfaceOverview =
+        ron::from_str(&std::fs::read_to_string(&input).expect("fixture read"))
+            .expect("fixture parse");
+    let overview: super::super::NorthernOverview = ron::from_str(
+        &std::fs::read_to_string(root.join("grand-overview.ron")).expect("overview read"),
+    )
+    .expect("overview parse");
+    let manifest: WorldManifest =
+        ron::from_str(&std::fs::read_to_string(root.join("manifest.ron")).expect("manifest read"))
+            .expect("manifest parse");
+    manifest.validate().expect("sealed manifest");
+    assert_eq!(manifest.fingerprint, expected);
+    assert_eq!(overview.package_fingerprint, expected);
+    assert_eq!(overview.source_fingerprint, manifest.source_fingerprint);
+    let materials: BTreeMap<_, _> = overview
+        .materials
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            (
+                m.id.as_str(),
+                (u16::try_from(i).expect("material index"), m.solid),
+            )
+        })
+        .collect();
+    // The external selection/protection fixture must reproduce every actual
+    // solid interval in its entire source + halo, not only the four roof tops.
+    for chunk in &source.chunks {
+        let id = chunk.coordinate;
+        let descriptor = manifest
+            .chunks
+            .iter()
+            .find(|d| d.coordinate == id)
+            .expect("manifest chunk");
+        let package: ChunkPackage = ron::from_str(
+            &std::fs::read_to_string(root.join(&descriptor.path)).expect("source chunk read"),
+        )
+        .expect("source chunk parse");
+        package
+            .validate_against_manifest(&manifest)
+            .expect("sealed source chunk");
+        let actual: BTreeMap<_, _> = package.columns.iter().map(|c| (c.position, c)).collect();
+        let origin = id.origin().expect("origin");
+        for (i, &profile) in chunk.profiles.iter().enumerate() {
+            let i = i64::try_from(i).expect("local index");
+            let p = origin
+                .checked_add(hex_world_contracts::WorldHex::new(i % 16, i / 16))
+                .expect("column");
+            let Some(column) = actual.get(&p) else {
+                assert_eq!(profile, OUTSIDE_PROFILE);
+                continue;
+            };
+            let expected: Vec<_> = column
+                .runs
+                .iter()
+                .filter_map(|run| {
+                    let &(material, solid) = materials
+                        .get(run.material.as_str())
+                        .expect("known material");
+                    solid.then(|| SolidRun {
+                        bottom: i16::try_from(run.bottom).expect("level"),
+                        top: i16::try_from(run.top).expect("level"),
+                        material,
+                    })
+                })
+                .collect();
+            assert_eq!(
+                source
+                    .profiles
+                    .get(usize::from(profile))
+                    .expect("profile")
+                    .runs,
+                expected,
+                "complete source profile at {p:?}"
+            );
+        }
+    }
+    let builder = SurfaceBuilder::new(
+        &source,
+        overview.radius,
+        overview.level_bounds,
+        &overview.materials,
+        f64::from(overview.level_height),
+    )
+    .expect("checked source");
+    let mut receipts = Vec::new();
+    let mut patches = Vec::new();
+    let mut exported = Vec::new();
+    for q in 28..=29 {
+        for r in -20..=-19 {
+            let coordinate = ChunkId { q, r };
+            let surface = builder
+                .build_patch(coordinate)
+                .expect("actual constrained surface");
+            let faces = builder
+                .build_faces(coordinate, &surface, 65_536)
+                .expect("actual exact interval faces");
+            receipts.push(serde_json::json!({"chunk":[q,r],"cap_vertices":surface.vertices.len(),"cap_triangles":surface.triangles.len(),"maximum_error":surface.maximum_error,"unshared_face_vertices":faces.vertices,"face_triangles":faces.triangles}));
+            exported.extend(faces.faces.iter().map(|face| serde_json::json!({"chunk":[q,r],"kind":format!("{:?}",face.kind),"material":face.material,"points":face.points.iter().map(|p| [p.lattice[0],p.level,p.lattice[1]]).collect::<Vec<_>>()})));
+            patches.push((coordinate, surface));
+        }
+    }
+    for (coordinate, surface) in patches {
+        source
+            .chunks
+            .iter_mut()
+            .find(|c| c.coordinate == coordinate)
+            .expect("owned source block")
+            .surface = Some(surface);
+    }
+    std::fs::create_dir(&output).expect("fresh output");
+    std::fs::write(
+        output.join("surface.ron"),
+        ron::ser::to_string(&source).expect("surface serialize"),
+    )
+    .expect("surface write");
+    std::fs::write(
+        output.join("faces.json"),
+        serde_json::to_vec(&exported).expect("faces serialize"),
+    )
+    .expect("faces write");
+    std::fs::write(output.join("receipt.json"), serde_json::to_vec_pretty(&serde_json::json!({"kind":"ACTUAL_SOURCE_CONSTRAINED_CRYSTAL_FACE_EXPORT","package_fingerprint":expected,"source_fingerprint":manifest.source_fingerprint,"source_chunks":source.chunks.len(),"profiles":source.profiles.len(),"patches":receipts,"limits":["No renderer/edit/picking acceptance.","Outer legacy interface remains explicitly unresolved."]})).expect("receipt serialize")).expect("receipt write");
+}

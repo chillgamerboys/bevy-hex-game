@@ -26,6 +26,36 @@ impl<'a> Source<'a> {
     fn known(&self, column: WorldHex) -> bool {
         self.chunks.contains_key(&ChunkId::from_world_hex(column))
     }
+    pub(super) fn profile(
+        &self,
+        column: WorldHex,
+    ) -> Result<Option<(&super::SolidProfile, u8)>, ContractError> {
+        let coordinate = ChunkId::from_world_hex(column);
+        let chunk = self
+            .chunks
+            .get(&coordinate)
+            .ok_or_else(|| invalid("missing face profile halo"))?;
+        let origin = coordinate.origin()?;
+        let index = usize::try_from((column.r - origin.r) * CHUNK_SIZE + column.q - origin.q)
+            .map_err(|error| invalid(&format!("face profile address: {error}")))?;
+        let id = *chunk
+            .profiles
+            .get(index)
+            .ok_or_else(|| invalid("missing face profile index"))?;
+        if id == OUTSIDE_PROFILE {
+            return Ok(None);
+        }
+        Ok(Some((
+            self.overview
+                .profiles
+                .get(usize::from(id))
+                .ok_or_else(|| invalid("missing face profile"))?,
+            *chunk
+                .protection
+                .get(index)
+                .ok_or_else(|| invalid("missing face protection"))?,
+        )))
+    }
     pub(super) fn unprotected_top(&self, column: WorldHex) -> Option<i16> {
         let coordinate = ChunkId::from_world_hex(column);
         let chunk = self.chunks.get(&coordinate)?;
